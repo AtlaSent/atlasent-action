@@ -2,7 +2,7 @@
 
 > **Doctrine (2026-05-18 normalization).** This roadmap follows the
 > canonical phase framing in
-> [`atlasent/VERSIONING_DOCTRINE.md`](https://github.com/Atlasent/atlasent/blob/claude/normalize-roadmap-versioning-NWPuP/VERSIONING_DOCTRINE.md).
+> the internal `VERSIONING_DOCTRINE.md`.
 > The public/runtime contract is **AtlaSent v1** (stable). Roadmap
 > sequencing uses **Phase 1 / Phase 2 / Phase 3** (with `Wave` / `Pillar`
 > inside). There is no "v2 product" and no "v3 product"; Phase 2 and

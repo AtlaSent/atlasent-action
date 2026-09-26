@@ -162,7 +162,7 @@ update only.
 
 ### Platform-generation reframing (doc-only, no code change)
 
-Mirrors the umbrella reframing in [`atlasent/CHANGELOG.md`](https://github.com/Atlasent/atlasent/blob/main/CHANGELOG.md). Platform generations: **v1** = pilot + cash-flowing capability layer (this repo's V2_ROLLOUT.md is preserved with a normalization header and continues to apply); **v2** = full enterprise surface ([`atlasent/ENTERPRISE_V2_ROLLOUT.md`](https://github.com/Atlasent/atlasent/blob/main/ENTERPRISE_V2_ROLLOUT.md)); **v3** = execution assurance. `V2-D#` identifiers retained; new decisions use `PROD-D#`. Package SemVer (e.g. `@atlasent/sdk@2.x`) is decoupled from platform generation labels per [`atlasent/VERSIONING_DOCTRINE.md`](https://github.com/Atlasent/atlasent/blob/main/VERSIONING_DOCTRINE.md) doctrine 1.
+Mirrors the umbrella reframing in the internal `CHANGELOG.md`. Platform generations: **v1** = pilot + cash-flowing capability layer (this repo's V2_ROLLOUT.md is preserved with a normalization header and continues to apply); **v2** = full enterprise surface (the internal `ENTERPRISE_V2_ROLLOUT.md`); **v3** = execution assurance. `V2-D#` identifiers retained; new decisions use `PROD-D#`. Package SemVer (e.g. `@atlasent/sdk@2.x`) is decoupled from platform generation labels per the internal `VERSIONING_DOCTRINE.md` doctrine 1.
 
 ## [0.1.0] — 2026-05-01 — initial public release
 
