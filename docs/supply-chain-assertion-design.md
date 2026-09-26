@@ -14,9 +14,8 @@ The reason this follow-up existed — three publish gates
 `artifact.release`, which requires a `supply_chain` assertion this repo
 can't mint — **no longer applies to those three gates specifically.**
 
-`atlasent-control-plane` PR #180 (open, draft, not yet merged as of this
-writing:
-https://github.com/Atlasent/atlasent-control-plane/pull/180)
+An internal control-plane PR (open, draft, not yet merged as of this
+writing; not public)
 re-targets all three from `artifact.release` to `package.release`, with a
 live production query as evidence: `artifact.release` has exactly one row in
 runtime prod (`org_id: null`, the unprovisioned Canon template, zero active

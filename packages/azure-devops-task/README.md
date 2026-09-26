@@ -208,7 +208,7 @@ caller's job" pattern the top-level README documents for the GitHub Action.
 ## Protecting an Azure deployment
 
 The Azure Production Change Gate
-([plan](https://github.com/Atlasent/atlasent-api/blob/main/docs/design/AZURE_PRODUCTION_CHANGE_GATE_PLAN.md))
+(the internal plan)
 uses three pieces in one pipeline:
 
 1. **Before the change** — this task in `mode: evaluate-only` with

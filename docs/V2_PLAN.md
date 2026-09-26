@@ -2,7 +2,7 @@
 
 > **Doctrine normalization header (2026-05-18).** This file is
 > preserved unchanged below per Doctrine 4 of
-> [`atlasent/VERSIONING_DOCTRINE.md`](https://github.com/Atlasent/atlasent/blob/claude/normalize-roadmap-versioning-NWPuP/VERSIONING_DOCTRINE.md).
+> the internal `VERSIONING_DOCTRINE.md`.
 > Under the current doctrine there is no "v2 product"; the action
 > workstreams described here are split between **Phase 1** (batch /
 > streaming / matrix-job ergonomics) and **Phase 2** (enterprise
@@ -11,7 +11,7 @@
 > body refers to the historical pre-reframing pillar layout. Filename
 > retained per Doctrine 4.
 
-> Companion to the canonical plan: **[atlasent-api/docs/V2_PLAN.md](https://github.com/Atlasent/atlasent-api/blob/claude/v2-planning/docs/V2_PLAN.md)**.
+> Companion to the canonical plan: **the internal API-side `V2_PLAN.md`**.
 > This file enumerates only the GitHub Action workstreams. Product-level
 > rationale, non-goals, and timeline live in the canonical plan.
 > Status: **draft** — do not merge until v2 releases.
