@@ -1,7 +1,7 @@
 # Releasing `atlasent-action`
 
 Customers reference the action as
-`uses: AtlaSent-Systems-Inc/atlasent-action@v1`, so a published `v1` GitHub
+`uses: Atlasent/atlasent-action@v1`, so a published `v1` GitHub
 Release must exist and the floating `v1` tag must track the latest `v1.x`.
 
 The [`Release`](.github/workflows/release.yml) workflow builds, verifies the

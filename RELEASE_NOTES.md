@@ -2,7 +2,7 @@
 
 **Pending release.** Ships the merged evidence + remediation work to `@v1`
 consumers. The features below are already on `main` but the floating `v1` tag
-still points at a pre-#100 commit, so `uses: AtlaSent-Systems-Inc/atlasent-action@v1`
+still points at a pre-#100 commit, so `uses: Atlasent/atlasent-action@v1`
 does not yet include them — cutting `v1.4.0` (which auto-moves `v1`) fixes that.
 
 ### Trust at the moment of the gate
@@ -65,7 +65,7 @@ This release aligns the public release notes with the shipped `action.yml` contr
 ### Usage
 
 ```yaml
-- uses: AtlaSent-Systems-Inc/atlasent-action@v1
+- uses: Atlasent/atlasent-action@v1
   env:
     ATLASENT_API_KEY: ${{ secrets.ATLASENT_API_KEY }}
   with:

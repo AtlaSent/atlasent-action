@@ -180,7 +180,7 @@ Set `approvals-from: none` only when the selected policy does not depend on
 GitHub-review-derived approval evidence or when a different, explicitly trusted
 authority source is being used.
 
-### Real signed approval artifacts (atlasent-api#2830)
+### Real signed approval artifacts
 
 `context.approvals`/`context.approving_reviewers` above are a plain number and
 a name list — enough for a policy template that counts, but not a
@@ -606,8 +606,7 @@ The AtlaSent runtime's solo-operator compensating control substitutes a
 server-verified evidence chain (a fresh attestation from the org's own
 `solo_operator_attested_identity`, green CI on the commit, the PR's real
 merge timestamp past a cooling-off window, and a passing staging-acceptance
-run) for the missing second reviewer — see
-`atlasent-api` `_shared/solo-operator-compensating-control.ts`. This action's
+run) for the missing second reviewer. This action's
 `solo-operator-attest: "true"` mode records the ONE fact only the real solo
 operator can supply: mint a verified actor identity from THIS job's GitHub
 OIDC token (bound to `solo_operator.attest`, distinct from the identity
@@ -631,7 +630,7 @@ jobs:
           solo-operator-attest: "true"
           action: production.deploy
           solo-operator-action-class-id: ${{ vars.PRODUCTION_DEPLOY_ACTION_CLASS_ID }}
-          solo-operator-attestation-reason: "Solo founder deploy; CI green and staging accepted before promoting."
+          solo-operator-attestation-reason: "Single-maintainer deploy; CI green and staging accepted before promoting."
           target-id: api-service
           environment: live
           artifact-digest: ${{ needs.build.outputs.digest }}
@@ -676,13 +675,13 @@ and the control denies):
           solo-operator-attest: "true"
           action: control.override
           solo-operator-action-class-id: ${{ vars.CONTROL_OVERRIDE_ACTION_CLASS_ID }}
-          solo-operator-attestation-reason: "Solo founder disabling a WAF rule during an active incident."
+          solo-operator-attestation-reason: "Single maintainer disabling a WAF rule during an active incident."
           evidence-profile: |
             {"kind":"control_override","control_id":"waf-rule-442","override_scope":"inbound traffic only, api.example.com","reason":"Active incident INC-1029.","expires_at":"2026-08-30T13:00:00Z"}
 ```
 
-See `atlasent-api` `_shared/solo-operator-evidence-profile.ts` for the full
-field set per `kind` (`control_override`, `access_grant`).
+The AtlaSent API reference documents the full evidence-profile field set per
+`kind` (`control_override`, `access_grant`).
 
 ## Posture scan mode
 

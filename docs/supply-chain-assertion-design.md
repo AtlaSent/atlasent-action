@@ -16,7 +16,7 @@ can't mint — **no longer applies to those three gates specifically.**
 
 `atlasent-control-plane` PR #180 (open, draft, not yet merged as of this
 writing:
-https://github.com/AtlaSent-Systems-Inc/atlasent-control-plane/pull/180)
+https://github.com/Atlasent/atlasent-control-plane/pull/180)
 re-targets all three from `artifact.release` to `package.release`, with a
 live production query as evidence: `artifact.release` has exactly one row in
 runtime prod (`org_id: null`, the unprovisioned Canon template, zero active

@@ -60,118 +60,30 @@ jobs:
       # existed). Manual dispatches never reach this step: they are dry runs,
       # and every step after this one that signs or publishes is push-only.
       #
-      # POLICY: from package.release v7 (atlasent-api
-      # docs/runbooks/PACKAGE_RELEASE_V7_APPLY.md) the template for this
-      # workflow, `package_release_atlasent_action_tag_release_manager`, binds
-      # `workflow: Release` + `event_name: push` + `refs/tags/v<X.Y.Z>`. Before
-      # v7 it bound neither workflow nor event, so a dispatch of any workflow
-      # here on a v-tag ref was allowed. Renaming this workflow turns the gate
-      # into a guaranteed deny.
+      # POLICY: the `package.release` template that authorizes this workflow
+      # binds `workflow: Release` + `event_name: push` + `refs/tags/v<X.Y.Z>`.
+      # Renaming this workflow, or dispatching a different workflow on a
+      # v-tag ref, therefore turns the gate into a guaranteed deny.
       #
-      # KNOWN ISSUES — items 1 and 3 are RESOLVED (verified 2026-09-22,
-      # see each). Item 2 remains open. None of them was ever an
-      # atlasent-action code change — do not "fix" any of them by spoofing
-      # the actor or context below:
-      #   1. RESOLVED — was "STILL OPEN (unverified as of 2026-08-21)".
-      #      Authentication demonstrably works: this repo's
-      #      `package.release` evaluations reach real policy evaluation from
-      #      2026-08-29 05:46:37Z onward (allow), and an evaluation record
-      #      cannot exist at all behind the 401 described below, which is
-      #      returned before any policy is evaluated. Verified 2026-09-22 by
-      #      the same read-only, founder-authorized query of the runtime
-      #      system of record cited in item 3 — not from a workflow
-      #      conclusion. The original trace, kept for history: the last real
-      #      (non-bootstrap) gate runs (2026-06-29, run IDs 28344572087 /
-      #      28344637307) failed closed with "AtlaSent Gate: Authentication
-      #      failed (HTTP 401)" from `POST /v1-evaluate` — before any policy
-      #      was evaluated. This is the runtime's own
-      #      `denyResponse("unauthenticated", ...)` ("API key not found or
-      #      inactive"), thrown when `ATLASENT_API_KEY` doesn't resolve to
-      #      an active row via `validate_api_key`. Needs an operator to
-      #      verify/rotate the `ATLASENT_API_KEY` / `ATLASENT_BASE_URL` repo
-      #      secrets against the runtime project (kttccumlnmdtupgbyfue) in
-      #      atlasent-api. This gate will still 401 until that verification
-      #      happens, independent of issue 2's status below.
-      #   2. RESOLVED IN SHAPE AND DECIDED — apply status unconfirmed on
-      #      production as of 2026-08-21 (updated; this comment previously
-      #      described this as "pending a founder decision," which is now
-      #      stale). The founder decision WAS made and recorded, twice, in
-      #      atlasent-api: migration `20260852000000_package_release_
-      #      manager_bettyc925.sql` replaced the `package.release`
-      #      allow-list's placeholder identity with `github:bettyc925` as
-      #      the release-manager identity ("for now ... revisit around
-      #      2026-11-11" — a ~3-month window from the 2026-08-10 decision,
-      #      not a permanent grant), and `20260853000000_seed_package_
-      #      release_atlasent_action_gate.sql` activated the resulting
-      #      template D for this repo's confirmed real org (id omitted —
-      #      this is a PUBLIC repo; see atlasent-internal). Both migrations are
-      #      merged to atlasent-api's `main` and confirmed applied on
-      #      **staging** (verified directly against a `deploy-staging.yml`
-      #      run's migration-list output, not inferred from the migration
-      #      log). **Production apply status was not directly verified** —
-      #      per atlasent-api's own hard-won lesson, neither a migration-log
-      #      entry nor deploy-run timing proves an object exists on a given
-      #      target; only a direct query does (`docs/MIGRATION_LOG.md`'s own
-      #      "production object verification is evidence" rule). If this
-      #      gate is still denying on a real (non-bootstrap) release attempt
-      #      after issue 1 is resolved, check whether these two migrations
-      #      have actually reached the production runtime project — that is
-      #      now the remaining gap, not an open decision.
-      #
-      #   1 and 2 above are now SUPERSEDED by direct evidence, not just
-      #   theorized as fixed: the real v1.6.0 release attempt (run
-      #   34530024051, 2026-09-10) got past both — no 401, and actor
-      #   resolution fell back correctly to `github:bettyc925` (with a
-      #   logged warning that the workload-identity mint itself 403'd on
-      #   `idp_broker:mint`, a separate, lower-priority gap — the fallback
-      #   is the documented, working path per issue 2's own migration).
-      #
-      #   3. RESOLVED 2026-09-10 21:51:55Z — was "NEW, OPEN as of
-      #      2026-09-10". Kept rather than deleted because the reasoning
-      #      below was half right in a way worth preserving, and because
-      #      CLAUDE.md carried the stale version of it for eleven days.
-      #
-      #      What happened: run 34530024051 (actor `github:bettyc925`,
-      #      environment `prod`) reached real policy evaluation and denied
-      #      with `AtlaSent: PR #174 has 0 approving reviews` followed by
-      #      `Authorization DENIED: No template condition matched`. PR #174
-      #      was simply the most recently merged PR on `main` at tag time —
-      #      a tag push has no PR of its own for the approvals reader to
-      #      inspect, so it fell back to that and found none. That part of
-      #      the diagnosis was correct and is not the denial's cause: the
-      #      release-manager template does not read approvals at all.
-      #      Full job log:
-      #      https://github.com/Atlasent/atlasent-action/actions/runs/34530024051/job/103048215470
-      #
-      #      Why it is resolved: the SAME tag (`refs/tags/v1.6.0`, same
-      #      `push` event, same actor) evaluated **allow** 48 minutes later
-      #      at 21:51:55Z, and every subsequent release evaluation for this
-      #      repo has allowed. A real tag push had also already allowed on
-      #      2026-08-29 05:46:37Z for `refs/tags/v1.5.0` — eleven days
-      #      BEFORE this deny — so "denies on a tag push" was never the
-      #      general rule. Verified 2026-09-22 by a read-only, founder-
-      #      authorized query of this repo's own `package.release`
-      #      evaluations on the runtime system of record; not inferred from
-      #      a workflow conclusion or an issue status.
-      #
-      #      This block's standing rule was vindicated, so keep it: do NOT
-      #      "fix" a gate denial by reshaping the context until you have
-      #      read the org's real `package.release` bundle. When that read
-      #      finally happened (2026-09-22) the context shape turned out to
-      #      be fine, and the thing that actually decides whether a release
-      #      gate can allow is WHICH TENANT the pipeline's
-      #      `ATLASENT_API_KEY` authenticates as — templates are seeded per
-      #      organization, so a key issued for one tenant cannot match a
-      #      template seeded into another. Speculatively adding
-      #      `context.*` fields here would have changed nothing and
-      #      obscured that. `atlasent-sdk` is the repo where this is still
-      #      live: see `atlasent-internal`
-      #      `planning/PACKAGE_RELEASE_GATE_ORG_TARGETING_2026-09-22.md`
-      #      (identifiers stay out of this public repo).
-      #
-      #      Still genuinely open, unchanged and unrelated: the
-      #      `idp_broker:mint` 403 noted in item 2 above, which the actor
-      #      fallback correctly works around.
+      # TROUBLESHOOTING — none of these has ever needed an atlasent-action
+      # code change. Do NOT "fix" a gate failure by spoofing the actor or
+      # reshaping the context below:
+      #   - "Authentication failed (HTTP 401)" is returned before any policy
+      #     is evaluated: the `ATLASENT_API_KEY` / `ATLASENT_BASE_URL` repo
+      #     secrets do not resolve to an active key. Verify or rotate them.
+      #   - "No template condition matched" on a real tag push: policy
+      #     templates are seeded per organization, so check WHICH
+      #     organization the pipeline's `ATLASENT_API_KEY` authenticates as
+      #     and read that organization's real `package.release` policy
+      #     before changing anything here. Adding speculative `context.*`
+      #     fields will not help.
+      #   - A tag push has no pull request of its own, so the approvals
+      #     reader may log "PR #N has 0 approving reviews" for the most
+      #     recently merged PR. The release-manager template does not read
+      #     approvals, so that line is informational, not the deny cause.
+      #   - If the workload-identity mint is refused, the action logs a
+      #     warning and falls back to the `actor` input below; that fallback
+      #     is the documented, working path.
       - name: AtlaSent release gate
         if: ${{ github.event_name == 'push' }}
         uses: ./

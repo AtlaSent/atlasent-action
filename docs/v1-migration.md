@@ -45,7 +45,7 @@ v1 adds these outputs (see `action.yml` for the full list of 48):
 ```yaml
 - name: Gate with AtlaSent
   id: gate
-  uses: AtlaSent-Systems-Inc/atlasent-action@v1
+  uses: Atlasent/atlasent-action@v1
   env:
     ATLASENT_API_KEY: ${{ secrets.ATLASENT_API_KEY }}
     ATLASENT_BASE_URL: ${{ secrets.ATLASENT_BASE_URL }}
@@ -62,7 +62,7 @@ v1 adds these outputs (see `action.yml` for the full list of 48):
 # adjacent):
 - name: Verify permit
   if: always()
-  uses: AtlaSent-Systems-Inc/atlasent-action@v1
+  uses: Atlasent/atlasent-action@v1
   env:
     ATLASENT_API_KEY: ${{ secrets.ATLASENT_API_KEY }}
     ATLASENT_BASE_URL: ${{ secrets.ATLASENT_BASE_URL }}

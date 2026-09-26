@@ -64,7 +64,7 @@ We follow [responsible disclosure](https://cheatsheetseries.owasp.org/cheatsheet
 ## Recommended usage
 
 ```yaml
-- uses: AtlaSent-Systems-Inc/atlasent-action@v1  # pin to SHA in production
+- uses: Atlasent/atlasent-action@v1  # pin to SHA in production
   env:
     ATLASENT_API_KEY: ${{ secrets.ATLASENT_API_KEY }}
     ATLASENT_BASE_URL: ${{ secrets.ATLASENT_BASE_URL }}

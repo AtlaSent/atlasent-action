@@ -4,7 +4,7 @@
   "name": "AtlaSentGate",
   "friendlyName": "AtlaSent Gate",
   "description": "Enforce a real-time AtlaSent authorization gate before a deployment or other critical pipeline step runs (evaluate -> verify -> permit, fail-closed)",
-  "helpMarkDown": "See https://github.com/AtlaSent-Systems-Inc/atlasent-action/tree/main/packages/azure-devops-task for the full input/output reference and pipeline examples. Requires the ATLASENT_API_KEY secret and (optionally) ATLASENT_BASE_URL to be set as environment variables on this task step.",
+  "helpMarkDown": "See https://github.com/Atlasent/atlasent-action/tree/main/packages/azure-devops-task for the full input/output reference and pipeline examples. Requires the ATLASENT_API_KEY secret and (optionally) ATLASENT_BASE_URL to be set as environment variables on this task step.",
   "category": "Utility",
   "author": "AtlaSent Systems, Inc.",
   "version": {
