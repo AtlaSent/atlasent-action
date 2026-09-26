@@ -86,7 +86,7 @@ jobs:
       - name: Issue an artifact-bound permit
         if: inputs.mode != 'preflight'
         id: issue
-        uses: AtlaSent-Systems-Inc/atlasent-action@19e8ce627532ff32864b1d47297e9b9e4e091e20
+        uses: Atlasent/atlasent-action@19e8ce627532ff32864b1d47297e9b9e4e091e20
         env:
           ATLASENT_BASE_URL: ${{ vars.ATLASENT_BASE_URL }}
           ATLASENT_API_KEY: ${{ secrets.ATLASENT_API_KEY }}
@@ -105,7 +105,7 @@ jobs:
       - name: Consume and verify the permit at the execution boundary
         if: inputs.mode != 'preflight'
         id: verify
-        uses: AtlaSent-Systems-Inc/atlasent-action@19e8ce627532ff32864b1d47297e9b9e4e091e20
+        uses: Atlasent/atlasent-action@19e8ce627532ff32864b1d47297e9b9e4e091e20
         env:
           ATLASENT_BASE_URL: ${{ vars.ATLASENT_BASE_URL }}
           ATLASENT_API_KEY: ${{ secrets.ATLASENT_API_KEY }}

@@ -55,7 +55,7 @@ jobs:
           echo "id=${{ vars.GOVERNED_CHANGE_ID }}" >> "$GITHUB_OUTPUT"
 
       - name: Run advisory governance agents
-        uses: AtlaSent-Systems-Inc/atlasent-action@v2
+        uses: Atlasent/atlasent-action@v2
         with:
           api-url: https://api.atlasent.io
           governance-agents: migration_review,runtime_contract_drift

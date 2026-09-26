@@ -2,7 +2,7 @@
 
 > **Doctrine normalization header (2026-05-18).** This file is
 > preserved unchanged below per Doctrine 4 of
-> [`atlasent/VERSIONING_DOCTRINE.md`](https://github.com/AtlaSent-Systems-Inc/atlasent/blob/claude/normalize-roadmap-versioning-NWPuP/VERSIONING_DOCTRINE.md).
+> [`atlasent/VERSIONING_DOCTRINE.md`](https://github.com/Atlasent/atlasent/blob/claude/normalize-roadmap-versioning-NWPuP/VERSIONING_DOCTRINE.md).
 > Under the current doctrine there is no "v2 product"; the work
 > described here is **Phase 1** (additive on the `AtlaSent v1`
 > contract). The "v2.1" label is the action's npm/Marketplace SemVer
@@ -12,21 +12,21 @@
 
 > **Reframing normalization header (2026-05-18).** This document
 > remains in scope and is preserved unchanged per the "do not rewrite
-> history" doctrine ([`atlasent/VERSIONING_DOCTRINE.md`](https://github.com/AtlaSent-Systems-Inc/atlasent/blob/main/VERSIONING_DOCTRINE.md)
+> history" doctrine ([`atlasent/VERSIONING_DOCTRINE.md`](https://github.com/Atlasent/atlasent/blob/main/VERSIONING_DOCTRINE.md)
 > doctrine 4). Under the 2026-05-18 platform-generation reframing,
 > the work described here is reclassified as the **v1.x capability
 > layer** — additive cash-flowing capabilities on top of the V1 GA
 > substrate. The platform-generation label **v2** now refers to the
 > full enterprise surface, planned in
-> [`atlasent/ENTERPRISE_V2_ROLLOUT.md`](https://github.com/AtlaSent-Systems-Inc/atlasent/blob/main/ENTERPRISE_V2_ROLLOUT.md).
+> [`atlasent/ENTERPRISE_V2_ROLLOUT.md`](https://github.com/Atlasent/atlasent/blob/main/ENTERPRISE_V2_ROLLOUT.md).
 > Filename and `V2-D#` identifiers are retained for reference
 > stability; "V2" in this document refers to the historical pre-reframing
 > framing, not the post-reframing platform-generation v2. New
 > decisions use the **`PROD-D#`** namespace. See
-> [`atlasent/ROADMAP.md`](https://github.com/AtlaSent-Systems-Inc/atlasent/blob/main/ROADMAP.md)
+> [`atlasent/ROADMAP.md`](https://github.com/Atlasent/atlasent/blob/main/ROADMAP.md)
 > for the current generation matrix.
 
-Wave B of the [umbrella v2 rollout](https://github.com/AtlaSent-Systems-Inc/atlasent/blob/claude/plan-v2-rollout-5IPGF/V2_ROLLOUT.md). Companion implementation to plan PR #15.
+Wave B of the [umbrella v2 rollout](https://github.com/Atlasent/atlasent/blob/claude/plan-v2-rollout-5IPGF/V2_ROLLOUT.md). Companion implementation to plan PR #15.
 
 ## Status
 

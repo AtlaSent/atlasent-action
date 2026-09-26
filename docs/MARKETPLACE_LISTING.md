@@ -1,10 +1,8 @@
 # GitHub Marketplace Listing — AtlaSent Gate
 
 Operator procedure + approved listing copy for publishing this action to the
-GitHub Marketplace. Strategy context: developer-channel distribution
-(atlasent-internal `planning/PANW_AND_CLOUD_MARKETPLACE_STRATEGY_2026-07-30.md`
-— marketplaces are a procurement channel; this listing is a *discovery*
-channel: the action is free, drives API signups, and bills nothing itself).
+GitHub Marketplace. This listing is a developer *discovery* channel: the
+action is free, drives API signups, and bills nothing itself.
 
 ## Prerequisites (all already true — verify, don't rebuild)
 
