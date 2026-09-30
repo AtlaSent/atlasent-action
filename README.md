@@ -2,6 +2,8 @@
 
 GitHub Action that enforces execution-time AtlaSent authorization gates on deployments and other critical CI/CD actions.
 
+It is the pipeline step behind AtlaSent **Production Change Protection**. Enterprise teams that need coverage across many pipelines and change paths can [schedule an Enterprise call](https://cal.com/atlasent/discovery); everyone else can start free with an API key.
+
 AtlaSent evaluates an attempted action before it executes, issues a scoped permit
 when the action is authorized, and verifies that permit before the protected step
 runs. A deny, hold, escalation, invalid permit, infrastructure failure, or binding
