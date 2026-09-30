@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { waitForApprovalResolution, EnforceError } from "../index";
+import { waitForApprovalResolution, verifyPermit, EnforceError } from "../index";
 
 vi.mock("../transport", () => ({ get: vi.fn(), post: vi.fn() }));
 
@@ -151,5 +151,179 @@ describe("waitForApprovalResolution", () => {
     const check = expect(p).rejects.toThrow(/timed out/);
     await vi.advanceTimersByTimeAsync(5_000);
     await check;
+  });
+
+  // ── Claim + consume (IMPL-026B claim-time reevaluation) ──────────────────
+
+  const CHANGE_PLAN = { operation: "deploy", revision: "abc123", artifact_ref: "sha256:aa" };
+  const IDENTITY = { version: "actor_identity.v1", signature: "runtime-signed" };
+
+  it("approved_awaiting_claim is claimable: claims with the caller-built { actor_identity, change_plan } body", async () => {
+    mockGet.mockResolvedValueOnce(
+      resp(200, { status: "approved_awaiting_claim", claim_environment: "live" }),
+    );
+    mockPost.mockResolvedValueOnce(
+      claimResp({
+        claimed: true,
+        permit_token: "pt.v4.claimed",
+        re_evaluation_decision: "allow",
+        re_evaluation_id: "ev-claim",
+        status: "approved",
+        execution_hash_expected: "h-claim",
+      }),
+    );
+    const buildClaimBody = vi.fn(async () => ({ actor_identity: IDENTITY, change_plan: CHANGE_PLAN }));
+
+    const result = await waitForApprovalResolution({ ...BASE_CONFIG, buildClaimBody });
+
+    expect(buildClaimBody).toHaveBeenCalledWith({
+      status: "approved_awaiting_claim",
+      claimEnvironment: "live",
+    });
+    const [url, body] = mockPost.mock.calls[0];
+    expect(url).toBe("https://api.test/v1/approvals/apr-1/claim-permit");
+    expect(JSON.parse(body as string)).toEqual({ actor_identity: IDENTITY, change_plan: CHANGE_PLAN });
+    expect(result).toEqual({
+      status: "approved_awaiting_claim",
+      reEvaluationDecision: "allow",
+      permitToken: "pt.v4.claimed",
+      executionHashExpected: "h-claim",
+      reEvaluationId: "ev-claim",
+    });
+  });
+
+  it("without buildClaimBody the legacy claim body stays exactly {}", async () => {
+    mockGet.mockResolvedValueOnce(resp(200, { status: "approved_awaiting_claim" }));
+    mockPost.mockResolvedValueOnce(claimResp({ claimed: true, permit_token: "pt.x" }));
+    await waitForApprovalResolution(BASE_CONFIG);
+    expect(mockPost.mock.calls[0][1]).toBe("{}");
+  });
+
+  it("the claim body is built at claim time, not before (identity minted after the human decides)", async () => {
+    mockGet
+      .mockResolvedValueOnce(resp(200, { status: "pending" }))
+      .mockResolvedValueOnce(resp(200, { status: "approved_awaiting_claim" }));
+    mockPost.mockResolvedValueOnce(claimResp({ claimed: true, permit_token: "pt.x", execution_hash_expected: "h" }));
+    const buildClaimBody = vi.fn(async () => ({ actor_identity: IDENTITY, change_plan: CHANGE_PLAN }));
+
+    const p = waitForApprovalResolution({ ...BASE_CONFIG, buildClaimBody });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(buildClaimBody).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await p;
+    expect(buildClaimBody).toHaveBeenCalledTimes(1);
+  });
+
+  it("a buildClaimBody failure fails closed with an EnforceError and sends NO claim", async () => {
+    mockGet.mockResolvedValueOnce(resp(200, { status: "approved_awaiting_claim" }));
+    const buildClaimBody = vi.fn(async () => {
+      throw new Error("OIDC token unavailable");
+    });
+    await expect(waitForApprovalResolution({ ...BASE_CONFIG, buildClaimBody })).rejects.toThrow(
+      /could not build the claim body \(OIDC token unavailable\)/,
+    );
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it("409 change_plan_mismatch: no permit, claimFailure names the code", async () => {
+    mockGet.mockResolvedValueOnce(resp(200, { status: "approved_awaiting_claim" }));
+    mockPost.mockResolvedValueOnce(
+      resp(409, { error: "change_plan_mismatch", message: "plan changed", status: 409 }),
+    );
+    const result = await waitForApprovalResolution({
+      ...BASE_CONFIG,
+      buildClaimBody: async () => ({ actor_identity: IDENTITY, change_plan: CHANGE_PLAN }),
+    });
+    expect(result.permitToken).toBeUndefined();
+    expect(result.executionHashExpected).toBeUndefined();
+    expect(result.claimFailure).toBe("change_plan_mismatch");
+  });
+
+  it("a non-JSON non-200 claim reports the HTTP status as claimFailure", async () => {
+    mockGet.mockResolvedValueOnce(resp(200, { status: "approved" }));
+    mockPost.mockResolvedValueOnce({ status: 502, body: "bad gateway" });
+    const result = await waitForApprovalResolution(BASE_CONFIG);
+    expect(result.permitToken).toBeUndefined();
+    expect(result.claimFailure).toBe("HTTP 502");
+  });
+
+  it("a malformed 200 claim response yields no permit", async () => {
+    mockGet.mockResolvedValueOnce(resp(200, { status: "approved" }));
+    mockPost.mockResolvedValueOnce({ status: 200, body: "not json" });
+    const result = await waitForApprovalResolution(BASE_CONFIG);
+    expect(result.permitToken).toBeUndefined();
+    expect(result.claimFailure).toBe("malformed_response");
+  });
+
+  it("claimed:true with no permit_token is still no permit", async () => {
+    mockGet.mockResolvedValueOnce(resp(200, { status: "approved" }));
+    mockPost.mockResolvedValueOnce(claimResp({ claimed: true, permit_token: "" }));
+    const result = await waitForApprovalResolution(BASE_CONFIG);
+    expect(result.permitToken).toBeUndefined();
+    expect(result.claimFailure).toBe("not_claimed");
+  });
+
+  it("a claim response without execution_hash_expected leaves it undefined (the caller decides it is fatal)", async () => {
+    mockGet.mockResolvedValueOnce(resp(200, { status: "approved_awaiting_claim" }));
+    mockPost.mockResolvedValueOnce(claimResp({ claimed: true, permit_token: "pt.x" }));
+    const result = await waitForApprovalResolution(BASE_CONFIG);
+    expect(result.permitToken).toBe("pt.x");
+    expect(result.executionHashExpected).toBeUndefined();
+  });
+
+  it("revoked is terminal, never claimed", async () => {
+    mockGet.mockResolvedValueOnce(resp(200, { status: "revoked" }));
+    const buildClaimBody = vi.fn(async () => ({}));
+    const result = await waitForApprovalResolution({ ...BASE_CONFIG, buildClaimBody });
+    expect(result).toEqual({ status: "revoked", reEvaluationDecision: undefined });
+    expect(buildClaimBody).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it("end to end: the claimed permit is verified with payload_hash = the claim's execution_hash_expected", async () => {
+    mockGet.mockResolvedValueOnce(resp(200, { status: "approved_awaiting_claim" }));
+    mockPost
+      .mockResolvedValueOnce(
+        claimResp({ claimed: true, permit_token: "pt.v4.claimed", execution_hash_expected: "h-claim" }),
+      )
+      .mockResolvedValueOnce(resp(200, { valid: true, outcome: "verified" }));
+    const resolution = await waitForApprovalResolution({
+      ...BASE_CONFIG,
+      buildClaimBody: async () => ({ actor_identity: IDENTITY, change_plan: CHANGE_PLAN }),
+    });
+
+    const vr = await verifyPermit(
+      { apiKey: "ask_test_key", apiUrl: "https://api.test", action: "production.deploy", actor: "a", environment: "live" },
+      {
+        decision: "allow",
+        permitToken: resolution.permitToken,
+        executionHashExpected: resolution.executionHashExpected,
+      },
+    );
+    expect(vr.verified).toBe(true);
+    const [verifyUrl, verifyBody] = mockPost.mock.calls[1];
+    expect(verifyUrl).toBe("https://api.test/v1-verify-permit");
+    expect(JSON.parse(verifyBody as string)).toMatchObject({
+      permit_token: "pt.v4.claimed",
+      payload_hash: "h-claim",
+      action_type: "production.deploy",
+      environment: "live",
+    });
+  });
+
+  it("end to end: a replayed claimed permit (PERMIT_ALREADY_USED) fails verification closed", async () => {
+    mockGet.mockResolvedValueOnce(resp(200, { status: "approved" }));
+    mockPost
+      .mockResolvedValueOnce(claimResp({ claimed: true, permit_token: "pt.v4.claimed", execution_hash_expected: "h" }))
+      .mockResolvedValueOnce(
+        resp(200, { valid: false, outcome: "replay_blocked", verify_error_code: "PERMIT_ALREADY_USED" }),
+      );
+    const resolution = await waitForApprovalResolution(BASE_CONFIG);
+    await expect(
+      verifyPermit(
+        { apiKey: "k", apiUrl: "https://api.test", action: "production.deploy", actor: "a" },
+        { decision: "allow", permitToken: resolution.permitToken, executionHashExpected: resolution.executionHashExpected },
+      ),
+    ).rejects.toMatchObject({ verifyErrorCode: "PERMIT_ALREADY_USED", phase: "verify-permit" });
   });
 });

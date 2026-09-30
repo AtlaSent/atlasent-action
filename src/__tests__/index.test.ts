@@ -609,6 +609,7 @@ describe("pause-and-resume approval protocol (wait-for-approval)", () => {
       status: "approved",
       reEvaluationDecision: "allow",
       permitToken: "pt.v4.fresh",
+      executionHashExpected: "exec-hash-claimed",
     });
     mockVerifyPermit.mockResolvedValueOnce({ verified: true, outcome: "verified" });
 
@@ -698,22 +699,250 @@ describe("pause-and-resume approval protocol (wait-for-approval)", () => {
     expect(getConsoleLogs().some((l) => l.includes("timed out"))).toBe(true);
   });
 
-  it("wait-for-approval=true has no effect in evaluate-only mode: enforce() is bypassed entirely, so a hold decision falls through evaluate()'s own path, never waitForApprovalResolution", async () => {
+  it("wait-for-approval=true in evaluate-only mode: claims the permit and outputs it UNCONSUMED (permit-token + execution-hash) for the boundary verify step", async () => {
     setApiKey();
     setInput("action", "production.deploy");
     setInput("mode", "evaluate-only");
     setInput("wait-for-approval", "true");
 
-    // evaluate() (not enforce()) returns hold as a plain Decision — it does
-    // not throw for a decision-level hold, only for infra failures. This
-    // pins that wait-for-approval never fires outside the enforce() path.
+    // evaluate() (not enforce()) returns hold as a plain Decision; the local
+    // verify() turns it into a phase-"verify" EnforceError, which is what
+    // routes it into the wait.
     mockEvaluate.mockResolvedValueOnce(
-      makeDecision({ decision: "hold", approvalRequestId: "apr-7", permitToken: undefined }),
+      makeDecision({
+        decision: "hold",
+        approvalRequestId: "apr-7",
+        permitToken: undefined,
+        executionHashExpected: "stale-hold-hash",
+      }),
+    );
+    mockWaitForApproval.mockResolvedValueOnce({
+      status: "approved_awaiting_claim",
+      reEvaluationDecision: "allow",
+      permitToken: "pt.v4.claimed",
+      executionHashExpected: "exec-hash-claimed",
+      reEvaluationId: "ev-claim-1",
+    });
+
+    await run();
+
+    expect(mockEnforce).not.toHaveBeenCalled();
+    expect(mockWaitForApproval).toHaveBeenCalledTimes(1);
+    // Not consumed here: the execution boundary consumes it.
+    expect(mockVerifyPermit).not.toHaveBeenCalled();
+    const outputs = readOutputs(outputFile);
+    expect(outputs["decision"]).toBe("allow");
+    expect(outputs["verified"]).toBe("false");
+    expect(outputs["permit-issued"]).toBe("true");
+    expect(outputs["permit-token"]).toBe("pt.v4.claimed");
+    expect(outputs["execution-hash"]).toBe("exec-hash-claimed");
+    expect(outputs["evaluation-id"]).toBe("ev-claim-1");
+    expect(outputs["waited-for-approval"]).toBe("true");
+  });
+
+  it("wait-for-approval=true in evaluate-only mode: a claim with no execution hash for production.deploy fails closed and outputs no permit", async () => {
+    setApiKey();
+    setInput("action", "production.deploy");
+    setInput("mode", "evaluate-only");
+    setInput("wait-for-approval", "true");
+
+    mockEvaluate.mockResolvedValueOnce(
+      makeDecision({ decision: "escalate", approvalRequestId: "apr-7b", permitToken: undefined }),
+    );
+    mockWaitForApproval.mockResolvedValueOnce({ status: "approved", permitToken: "pt.v4.claimed" });
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    const outputs = readOutputs(outputFile);
+    expect(outputs["decision"]).toBe("deny");
+    expect(outputs["verified"]).toBe("false");
+    expect(outputs["permit-issued"]).toBe("false");
+    expect(outputs["permit-token"]).toBe("");
+  });
+});
+
+describe("wait-for-approval claim + consume at the execution boundary", () => {
+  function holdThenWait(action: string, approvalId = "apr-c1") {
+    setApiKey();
+    setInput("action", action);
+    setInput("wait-for-approval", "true");
+    const escalate = makeDecision({
+      decision: "escalate",
+      approvalRequestId: approvalId,
+      permitToken: undefined,
+      executionHashExpected: "stale-hold-hash",
+    });
+    mockEnforce.mockRejectedValueOnce(
+      new EnforceError("Escalated — manual review required", "verify", escalate),
+    );
+  }
+
+  type WaitConfig = {
+    buildClaimBody?: (row: { status: string; claimEnvironment?: string }) => Promise<Record<string, unknown>>;
+  };
+
+  it("production.deploy: the claim body carries a FRESHLY minted actor_identity and the SAME change_plan sent at evaluate", async () => {
+    holdThenWait("production.deploy");
+    let claimBody: Record<string, unknown> | undefined;
+    mockWaitForApproval.mockImplementationOnce(async (cfg: WaitConfig) => {
+      expect(typeof cfg.buildClaimBody).toBe("function");
+      claimBody = await cfg.buildClaimBody!({ status: "approved_awaiting_claim" });
+      return { status: "approved_awaiting_claim", permitToken: "pt.v4.c", executionHashExpected: "h-claim" };
+    });
+    mockVerifyPermit.mockResolvedValueOnce({ verified: true, outcome: "verified" });
+
+    await run();
+
+    // Minted once at evaluate, once more at claim time.
+    expect(mockMintWorkloadIdentity).toHaveBeenCalledTimes(2);
+    const evaluateConfig = mockEnforce.mock.calls[0][0] as { changePlan: unknown };
+    expect(claimBody).toEqual({
+      actor_identity: expect.objectContaining({ version: "actor_identity.v1" }),
+      change_plan: evaluateConfig.changePlan,
+    });
+    expect(Object.keys(claimBody!).sort()).toEqual(["actor_identity", "change_plan"]);
+    expect(evaluateConfig.changePlan).toEqual({ operation: "deploy", revision: "abc123" });
+  });
+
+  it("production.deploy: verify is called with the CLAIMED permit and the claim's execution_hash_expected, never the hold's stale hash", async () => {
+    holdThenWait("production.deploy");
+    mockWaitForApproval.mockResolvedValueOnce({
+      status: "approved_awaiting_claim",
+      permitToken: "pt.v4.c",
+      executionHashExpected: "h-claim",
+    });
+    mockVerifyPermit.mockResolvedValueOnce({ verified: true, outcome: "verified" });
+
+    await run();
+
+    expect(mockVerifyPermit).toHaveBeenCalledTimes(1);
+    const verifiedDecision = mockVerifyPermit.mock.calls[0][1] as Decision;
+    expect(verifiedDecision.permitToken).toBe("pt.v4.c");
+    expect(verifiedDecision.executionHashExpected).toBe("h-claim");
+    const outputs = readOutputs(outputFile);
+    expect(outputs["verified"]).toBe("true");
+    expect(outputs["execution-hash"]).toBe("h-claim");
+  });
+
+  it("production.deploy: a claim with no execution_hash_expected fails closed WITHOUT calling verify", async () => {
+    holdThenWait("production.deploy");
+    mockWaitForApproval.mockResolvedValueOnce({ status: "approved", permitToken: "pt.v4.c" });
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(mockVerifyPermit).not.toHaveBeenCalled();
+    const outputs = readOutputs(outputFile);
+    expect(outputs["verified"]).toBe("false");
+    expect(outputs["decision"]).toBe("deny");
+    expect(getConsoleLogs().some((l) => l.includes("execution_hash_expected"))).toBe(true);
+  });
+
+  it("production.deploy: claim refused with change_plan_mismatch fails closed with a plan-mismatch reason", async () => {
+    holdThenWait("production.deploy");
+    mockWaitForApproval.mockResolvedValueOnce({
+      status: "approved_awaiting_claim",
+      claimFailure: "change_plan_mismatch",
+    });
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(mockVerifyPermit).not.toHaveBeenCalled();
+    const outputs = readOutputs(outputFile);
+    expect(outputs["verified"]).toBe("false");
+    expect(outputs["decision"]).toBe("deny");
+    expect(getConsoleLogs().some((l) => l.includes("change_plan_mismatch"))).toBe(true);
+  });
+
+  it("production.deploy: a replayed claimed permit (verify → PERMIT_ALREADY_USED) fails closed with verified=false", async () => {
+    holdThenWait("production.deploy");
+    mockWaitForApproval.mockResolvedValueOnce({
+      status: "approved",
+      permitToken: "pt.v4.c",
+      executionHashExpected: "h-claim",
+    });
+    // The real verifyPermit throws on a non-verified outcome.
+    mockVerifyPermit.mockRejectedValueOnce(
+      new EnforceError(
+        "Permit verification failed (outcome=replay_blocked, code=PERMIT_ALREADY_USED)",
+        "verify-permit",
+        null,
+        { outcome: "replay_blocked", verifyErrorCode: "PERMIT_ALREADY_USED" },
+      ),
     );
 
     await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
-    expect(mockWaitForApproval).not.toHaveBeenCalled();
-    expect(mockEnforce).not.toHaveBeenCalled();
+    const outputs = readOutputs(outputFile);
+    expect(outputs["verified"]).toBe("false");
+    expect(outputs["verify-outcome"]).toBe("replay_blocked");
+    expect(outputs["verify-error-code"]).toBe("PERMIT_ALREADY_USED");
+    // Not reported as an "unexpected error" escape.
+    expect(getConsoleLogs().some((l) => l.includes("Unexpected error"))).toBe(false);
+  });
+
+  it("production.deploy: a failed re-mint at claim time makes buildClaimBody throw (no claim sent with a partial body)", async () => {
+    holdThenWait("production.deploy");
+    let thrown: unknown;
+    mockWaitForApproval.mockImplementationOnce(async (cfg: WaitConfig) => {
+      mockMintWorkloadIdentity.mockRejectedValueOnce(new Error("OIDC token unavailable"));
+      try {
+        await cfg.buildClaimBody!({ status: "approved_awaiting_claim" });
+      } catch (e) {
+        thrown = e;
+      }
+      throw new EnforceError("Approval claim refused before sending", "evaluate");
+    });
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(String(thrown)).toMatch(/OIDC token unavailable/);
+    expect(mockVerifyPermit).not.toHaveBeenCalled();
+  });
+
+  it("production.deploy: buildClaimBody refuses a claim_environment that differs from the evaluated environment", async () => {
+    holdThenWait("production.deploy");
+    let thrown: unknown;
+    mockWaitForApproval.mockImplementationOnce(async (cfg: WaitConfig) => {
+      try {
+        await cfg.buildClaimBody!({ status: "approved_awaiting_claim", claimEnvironment: "production" });
+      } catch (e) {
+        thrown = e;
+      }
+      return { status: "approved_awaiting_claim" };
+    });
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(String(thrown)).toMatch(/environment "production".*evaluated "test"/);
+  });
+
+  it("production.deploy: buildClaimBody refuses when the re-minted actor is not the evaluated actor", async () => {
+    holdThenWait("production.deploy");
+    let thrown: unknown;
+    mockWaitForApproval.mockImplementationOnce(async (cfg: WaitConfig) => {
+      mockMintWorkloadIdentity.mockResolvedValueOnce({
+        actorId: "github-actions:repo:999:workflow:other",
+        assertion: { version: "actor_identity.v1" },
+        source: { actor: "someone", sha: "abc123" },
+      });
+      try {
+        await cfg.buildClaimBody!({ status: "approved_awaiting_claim" });
+      } catch (e) {
+        thrown = e;
+      }
+      return { status: "approved_awaiting_claim" };
+    });
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(String(thrown)).toMatch(/not the actor that was evaluated/);
+  });
+
+  it("non-mandatory action (package.release): no claim-body builder is passed, so the legacy {} claim is unchanged", async () => {
+    holdThenWait("package.release");
+    mockWaitForApproval.mockResolvedValueOnce({ status: "approved", permitToken: "pt.v4.pkg" });
+    mockVerifyPermit.mockResolvedValueOnce({ verified: true, outcome: "verified" });
+
+    await run();
+
+    const cfg = mockWaitForApproval.mock.calls[0][0] as WaitConfig;
+    expect(cfg.buildClaimBody).toBeUndefined();
+    // No execution hash is required for a non-mandatory permit; verify still runs.
+    expect(mockVerifyPermit).toHaveBeenCalledTimes(1);
+    expect(readOutputs(outputFile)["verified"]).toBe("true");
   });
 });
 

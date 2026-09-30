@@ -2394,6 +2394,44 @@ export async function run(): Promise<void> {
     }
   }
 
+  // Claim body for a mandatory change-control approval (IMPL-026B claim-time
+  // reevaluation). Built at claim time, not evaluate time: the evaluate-time
+  // actor_identity.v1 is short-lived and a human decision can take up to
+  // max-wait-minutes. Throwing here fails the wait closed (no claim sent).
+  const buildMandatoryClaimBody = async (row: {
+    status: string;
+    claimEnvironment?: string;
+  }): Promise<Record<string, unknown>> => {
+    if (!productionChangePlan) {
+      throw new Error(`no change plan was derived for "${actionType}"`);
+    }
+    if (row.claimEnvironment != null && row.claimEnvironment !== environment) {
+      throw new Error(
+        `the approval must be claimed for environment "${row.claimEnvironment}", but this gate ` +
+          `evaluated "${environment}"`,
+      );
+    }
+    const claimer = await resolveProtectedActor({
+      apiKey,
+      apiUrl,
+      actionType,
+      environment,
+      triggeringActor: actor,
+    });
+    if (!claimer.workloadIdentity) {
+      throw new Error("no verified workload identity could be minted for the claim");
+    }
+    if (claimer.actorId !== actorId) {
+      throw new Error(
+        `the re-minted actor "${claimer.actorId}" is not the actor that was evaluated ("${actorId}")`,
+      );
+    }
+    return {
+      actor_identity: claimer.workloadIdentity.assertion,
+      change_plan: productionChangePlan,
+    };
+  };
+
   // Default false; flipped to true only if the pause-and-resume branch below
   // is actually entered, regardless of how that wait ultimately resolves —
   // this output reports whether the action waited, not whether it allowed.
@@ -2413,9 +2451,12 @@ export async function run(): Promise<void> {
     }
   } catch (err) {
     if (err instanceof EnforceError) {
+      // Applies to BOTH enforce and evaluate-only mode. In evaluate-only mode
+      // the claimed permit is output UNCONSUMED (permit-token +
+      // execution-hash) for a later `verify-permit: true` step to consume at
+      // the execution boundary — the same split the direct-allow path uses.
       const canWaitForApproval =
         waitForApprovalInput &&
-        !evaluateOnly &&
         err.phase === "verify" &&
         (err.decision?.decision === "hold" || err.decision?.decision === "escalate") &&
         !!err.decision?.approvalRequestId;
@@ -2454,6 +2495,16 @@ export async function run(): Promise<void> {
           apiUrl,
           approvalId: originalDecision.approvalRequestId as string,
           maxWaitMs,
+          // Mandatory change-control actions claim with the EXECUTOR's own,
+          // freshly minted verified identity and the SAME change plan sent
+          // at evaluate, so the runtime's claim-time reevaluation binds the
+          // permit to this executor and this plan (a changed plan answers
+          // 409 change_plan_mismatch). Approval alone never authorizes
+          // execution: nothing is minted until this claim runs. Every other
+          // action keeps the legacy `{}` claim, unchanged.
+          ...(MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType)
+            ? { buildClaimBody: buildMandatoryClaimBody }
+            : {}),
         });
       } catch (waitErr) {
         // Timeout, poll auth failure, or any other error from the wait
@@ -2473,8 +2524,13 @@ export async function run(): Promise<void> {
         return;
       }
 
-      if (resolution.status !== "approved" || !resolution.permitToken) {
-        // Denied, expired, denied_by_timeout, an approval accepted with no
+      if (
+        (resolution.status !== "approved" && resolution.status !== "approved_awaiting_claim") ||
+        !resolution.permitToken
+      ) {
+        // Denied, expired, denied_by_timeout, revoked, a refused claim
+        // (409 change_plan_mismatch, claim_in_progress, not the originating
+        // key, ...), an approval accepted with no
         // fresh permit minted (a legitimate "accepted the human input but a
         // different constraint still blocks" outcome — see IMPL-026A in
         // atlasent-api), or any other terminal non-allow — fail closed.
@@ -2482,7 +2538,11 @@ export async function run(): Promise<void> {
         // (commit status, Slack, PR comment, denyReason) carries the REAL
         // post-wait reason, not the stale original hold/escalate one.
         const reason =
-          `human approval resolved to '${resolution.status}'` +
+          (resolution.claimFailure === "change_plan_mismatch"
+            ? `human approval resolved to '${resolution.status}', but the claim was refused: the change ` +
+              "plan presented at claim differs from the plan that was approved (change_plan_mismatch)"
+            : `human approval resolved to '${resolution.status}'` +
+              (resolution.claimFailure ? ` (permit claim failed: ${resolution.claimFailure})` : "")) +
           (resolution.reEvaluationDecision
             ? ` (fresh reevaluation: ${resolution.reEvaluationDecision})`
             : "") +
@@ -2497,34 +2557,101 @@ export async function run(): Promise<void> {
         return;
       }
 
-      // Approved with a fresh permit token — re-verify it (same bindings as
-      // the original evaluate, fail-closed) before treating this as allow.
-      // "approved" alone never authorizes the deploy; only a verified permit
-      // does — the exact contract the direct-allow path already has.
-      const freshDecision: Decision = {
-        ...originalDecision,
-        decision: "allow",
-        permitToken: resolution.permitToken,
-      };
-      const vr = await verifyPermit(config, freshDecision);
-      if (!vr.verified) {
+      // A mandatory change-control permit is bound to a runtime-derived
+      // execution hash, and v1-verify-permit requires it back as
+      // payload_hash (PAYLOAD_HASH_REQUIRED otherwise). The hold decision's
+      // own hash (if any) describes the ORIGINAL evaluation, not the claimed
+      // permit, so it is never reused. No hash on the claim → refuse rather
+      // than attempt an unbound verify or hand an unbindable permit onward.
+      if (MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType) && !resolution.executionHashExpected) {
+        const reason =
+          "human approval was granted and a permit was claimed, but the claim response carried no " +
+          "execution_hash_expected, so the permit cannot be verified against its bound change plan " +
+          "— deploy blocked (fail-closed).";
         await reportEnforceFailure(
-          new EnforceError(
-            `Human approval was granted, but the fresh permit failed verification ` +
-              `(${vr.outcome ?? "unknown"}) — deploy blocked (fail-closed).`,
-            "verify-permit",
-            freshDecision,
-            { outcome: vr.outcome, verifyErrorCode: vr.verifyErrorCode, mismatchFields: vr.mismatchFields },
-          ),
+          new EnforceError(`Authorization DENIED: ${reason}`, "verify", {
+            ...originalDecision,
+            decision: "deny",
+            denyReason: reason,
+          }),
         );
         return;
       }
 
-      info(
-        "AtlaSent Gate: human approval resolved ALLOW — fresh permit verified " +
-          `(${vr.outcome ?? "verified"}). Proceeding.`,
-      );
-      enforceResult = { result: undefined, decision: freshDecision, verifyOutcome: vr.outcome };
+      // Approved with a fresh permit token. `executionHashExpected` is set
+      // explicitly (even to undefined) so the hold decision's stale value
+      // can never be re-presented for the claimed permit.
+      const freshDecision: Decision = {
+        ...originalDecision,
+        decision: "allow",
+        permitToken: resolution.permitToken,
+        executionHashExpected: resolution.executionHashExpected,
+        ...(resolution.reEvaluationId ? { evaluationId: resolution.reEvaluationId } : {}),
+      };
+
+      if (evaluateOnly) {
+        // Issue-only: hand the claimed permit to the execution-boundary
+        // verify step UNCONSUMED. The evaluate-only success branch below
+        // outputs permit-token + execution-hash and reports verified=false.
+        info(
+          "AtlaSent Gate: human approval resolved — permit CLAIMED (not verified or consumed). " +
+            "Re-verify it at the execution boundary.",
+        );
+        enforceResult = { result: undefined, decision: freshDecision, verifyOutcome: undefined };
+      } else {
+        // Re-verify and CONSUME it (same bindings as the original evaluate,
+        // fail-closed) before treating this as allow. "approved" alone never
+        // authorizes the deploy; only a verified permit does — the exact
+        // contract the direct-allow path already has.
+        // verifyPermit throws on a non-verified outcome (replay, expiry,
+        // binding mismatch) and on infra failure; route every such throw
+        // through the same fail-closed reporting instead of letting it
+        // escape as an "unexpected error".
+        let vr: Awaited<ReturnType<typeof verifyPermit>>;
+        try {
+          vr = await verifyPermit(config, freshDecision);
+        } catch (verifyErr) {
+          await reportEnforceFailure(
+            verifyErr instanceof EnforceError
+              ? new EnforceError(
+                  `Human approval was granted, but the claimed permit failed verification: ` +
+                    `${verifyErr.message}`,
+                  "verify-permit",
+                  freshDecision,
+                  {
+                    outcome: verifyErr.outcome,
+                    verifyErrorCode: verifyErr.verifyErrorCode,
+                    mismatchFields: verifyErr.mismatchFields,
+                  },
+                )
+              : new EnforceError(
+                  `Human approval was granted, but verifying the claimed permit failed: ` +
+                    `${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`,
+                  "verify-permit",
+                  freshDecision,
+                ),
+          );
+          return;
+        }
+        if (!vr.verified) {
+          await reportEnforceFailure(
+            new EnforceError(
+              `Human approval was granted, but the fresh permit failed verification ` +
+                `(${vr.outcome ?? "unknown"}) — deploy blocked (fail-closed).`,
+              "verify-permit",
+              freshDecision,
+              { outcome: vr.outcome, verifyErrorCode: vr.verifyErrorCode, mismatchFields: vr.mismatchFields },
+            ),
+          );
+          return;
+        }
+
+        info(
+          "AtlaSent Gate: human approval resolved ALLOW — fresh permit verified " +
+            `(${vr.outcome ?? "verified"}). Proceeding.`,
+        );
+        enforceResult = { result: undefined, decision: freshDecision, verifyOutcome: vr.outcome };
+      }
     } else {
       setOutput("decision", "error");
       setOutput("permit-token", "");

@@ -451,7 +451,7 @@ What actually happens, end to end:
 3. The moment that resolution lands, the next poll observes it. The status
    poll itself never carries the fresh permit token — a broadly-readable
    status row must not hand out a live bearer off a plain GET. On
-   `approved`, this step makes one further call,
+   `approved` (or `approved_awaiting_claim`), this step makes one further call,
    `POST /v1/approvals/{approval_request_id}/claim-permit`, an atomic
    one-time claim: the first caller to claim receives the token; any later
    claim (a retry, a second poller) gets nothing back. It then re-verifies
@@ -464,11 +464,29 @@ What actually happens, end to end:
    fails verification all fail the step closed — no deploy runs. The job
    summary and `decision` output reflect the real, final reason.
 
+**Approval alone never authorizes execution — the executor claims and
+consumes the permit.** For a mandatory change-control action
+(`production.deploy`, `infrastructure.change`, `production.rollback`,
+`secret.configuration.change`) the claim is made on `approved` or
+`approved_awaiting_claim` with `{ actor_identity, change_plan }`: an
+`actor_identity.v1` freshly re-minted for this job's own GitHub workload
+identity at claim time (it must be the same actor that was evaluated, and the
+same environment the approval is bound to), plus the exact `change_plan` sent
+at evaluate. The runtime runs its claim-time reevaluation against that
+executor; a changed plan is refused (`409 change_plan_mismatch`) and the step
+fails closed. The claimed permit is then verified with `payload_hash` set to
+the claim response's `execution_hash_expected` — a claim that does not carry
+it fails closed rather than attempting an unbound verify, and a replayed
+permit (`PERMIT_ALREADY_USED`) fails like any other. Other action types keep
+the plain `{}` claim. Only the API key that created the approval can claim
+it, and only the first claim wins.
+
 Requires `approvals:read` on the `ATLASENT_API_KEY` scopes (in addition to
-`evaluate:write` + `verify:execute`), and only applies to the default
-`mode: enforce` — `mode: evaluate-only` is its own two-step pattern and
-combining it with `wait-for-approval` has no effect (the wait step is never
-reached; evaluate-only already leaves verification to a later step).
+`evaluate:write` + `verify:execute`). With `mode: evaluate-only`, the step
+waits and claims the same way but does **not** verify or consume the permit:
+it outputs the claimed `permit-token` and `execution-hash` (with
+`verified: "false"`) for the later `verify-permit: true` step at the
+execution boundary, exactly like a direct allow in that mode.
 
 ## Fail-closed behavior
 
