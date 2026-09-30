@@ -226,13 +226,62 @@ export interface WaitForApprovalConfig {
     approvalId: string;
     /** Bounded wait — required, no default. Exceeding it throws (fail closed). */
     maxWaitMs: number;
+    /**
+     * Builds the POST /v1/approvals/{id}/claim-permit body, called once, at
+     * claim time (never earlier — a short-lived actor_identity.v1 minted at
+     * evaluate time may have expired while a human was deciding).
+     *
+     * Omit for the legacy claim (body `{}`), which is what every
+     * non-mandatory-change-control action sends. For a mandatory
+     * change-control action (production.deploy, infrastructure.change, ...)
+     * the caller supplies `{ actor_identity, change_plan }`: the executor's
+     * OWN freshly minted identity plus the SAME change plan it sent at
+     * evaluate, so the runtime's claim-time reevaluation (IMPL-026B) runs
+     * against the executor and refuses a changed plan (409
+     * change_plan_mismatch).
+     *
+     * If this throws, the wait fails closed with an EnforceError — no claim is
+     * attempted with a partial or empty body.
+     */
+    buildClaimBody?: (row: ApprovalClaimContext) => Promise<Record<string, unknown>>;
+}
+/** What the status poll told us about a claimable approval. */
+export interface ApprovalClaimContext {
+    /** "approved" or "approved_awaiting_claim". */
+    status: string;
+    /**
+     * IMPL-026B: the binding.environment the claimer's actor_identity.v1 must
+     * carry, when the runtime reports one (approved_awaiting_claim rows).
+     */
+    claimEnvironment?: string;
 }
 export interface ApprovalResolution {
-    /** Raw server status: "approved" | "denied" | "denied_by_timeout" | "expired" | ... */
+    /** Raw server status: "approved" | "approved_awaiting_claim" | "denied" | "denied_by_timeout" | "expired" | ... */
     status: string;
     reEvaluationDecision?: string;
-    /** Only present when status === "approved" AND the reevaluation actually minted one. */
+    /**
+     * Only present when the approval was claimable AND the claim actually
+     * returned a fresh permit (claimed: true).
+     */
     permitToken?: string;
+    /**
+     * The claimed permit's runtime-bound execution hash
+     * (`execution_hash_expected` on the claim response). The caller must
+     * re-present it as `payload_hash` at verify; for a production permit
+     * without it, verify fails PAYLOAD_HASH_REQUIRED. Absent when the claim
+     * response did not carry it — the caller decides whether that is fatal.
+     */
+    executionHashExpected?: string;
+    /** The claim-time reevaluation's evaluation id (`re_evaluation_id`), when reported. */
+    reEvaluationId?: string;
+    /**
+     * Why a claim was attempted but produced no permit: the runtime's error
+     * code (e.g. "change_plan_mismatch", "claim_in_progress"), "HTTP <n>",
+     * "not_claimed" (200 with claimed:false), "malformed_response", or
+     * "unreachable". Diagnostic only — absence of permitToken is what makes
+     * the outcome non-allow.
+     */
+    claimFailure?: string;
 }
 export declare function waitForApprovalResolution(config: WaitForApprovalConfig): Promise<ApprovalResolution>;
 /** Evaluate-context keys that v1-verify-permit re-checks against signed

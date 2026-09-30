@@ -234,30 +234,55 @@ var require_dist = __commonJS({
       }
     }
     var APPROVAL_POLL_INTERVAL_MS = 5e3;
+    var CLAIMABLE_APPROVAL_STATUSES = /* @__PURE__ */ new Set(["approved", "approved_awaiting_claim"]);
     function sleep(ms) {
       return new Promise((resolve4) => setTimeout(resolve4, ms));
     }
-    async function claimApprovalPermit(config, apiUrl) {
+    async function claimApprovalPermit(config, apiUrl, row) {
       const url = `${apiUrl}/v1/approvals/${encodeURIComponent(config.approvalId)}/claim-permit`;
+      let requestBody = "{}";
+      if (config.buildClaimBody) {
+        let built;
+        try {
+          built = await config.buildClaimBody(row);
+        } catch (err) {
+          throw new EnforceError2(`Approval claim refused before sending: could not build the claim body (${err instanceof Error ? err.message : String(err)}) \u2014 failing closed`, "evaluate");
+        }
+        requestBody = JSON.stringify(built);
+      }
       let status;
       let body;
       try {
-        ({ status, body } = await (0, transport_1.post)(url, "{}", { Authorization: `Bearer ${config.apiKey}` }));
+        ({ status, body } = await (0, transport_1.post)(url, requestBody, { Authorization: `Bearer ${config.apiKey}` }));
       } catch {
-        return void 0;
+        return { claimFailure: "unreachable" };
       }
-      if (status !== 200)
-        return void 0;
       let raw;
       try {
-        raw = JSON.parse(body);
+        const parsed = JSON.parse(body);
+        raw = parsed && typeof parsed === "object" ? parsed : void 0;
       } catch {
-        return void 0;
+        raw = void 0;
       }
-      if (raw["claimed"] !== true)
-        return void 0;
+      if (status !== 200) {
+        const code = raw && typeof raw["error"] === "string" ? raw["error"] : `HTTP ${status}`;
+        return { claimFailure: code };
+      }
+      if (!raw)
+        return { claimFailure: "malformed_response" };
+      const reEvaluationDecision = typeof raw["re_evaluation_decision"] === "string" ? raw["re_evaluation_decision"] : void 0;
       const permitToken = raw["permit_token"];
-      return typeof permitToken === "string" && permitToken.length > 0 ? permitToken : void 0;
+      if (raw["claimed"] !== true || typeof permitToken !== "string" || permitToken.length === 0) {
+        return { claimFailure: "not_claimed", reEvaluationDecision };
+      }
+      const hash = raw["execution_hash_expected"];
+      const reEvaluationId = raw["re_evaluation_id"];
+      return {
+        permitToken,
+        reEvaluationDecision,
+        executionHashExpected: typeof hash === "string" && hash.length > 0 ? hash : void 0,
+        reEvaluationId: typeof reEvaluationId === "string" && reEvaluationId.length > 0 ? reEvaluationId : void 0
+      };
     }
     async function waitForApprovalResolution3(config) {
       if (!config.approvalId) {
@@ -291,12 +316,19 @@ var require_dist = __commonJS({
           }
           const rowStatus = raw["status"];
           if (rowStatus && rowStatus !== "pending") {
-            const reEvaluationDecision = raw["re_evaluation_decision"];
-            const permitToken = rowStatus === "approved" ? await claimApprovalPermit(config, apiUrl) : void 0;
+            const polledReEvaluationDecision = raw["re_evaluation_decision"];
+            if (!CLAIMABLE_APPROVAL_STATUSES.has(rowStatus)) {
+              return { status: rowStatus, reEvaluationDecision: polledReEvaluationDecision };
+            }
+            const claimEnvironment = typeof raw["claim_environment"] === "string" ? raw["claim_environment"] : void 0;
+            const claim = await claimApprovalPermit(config, apiUrl, { status: rowStatus, claimEnvironment });
             return {
               status: rowStatus,
-              reEvaluationDecision,
-              permitToken
+              reEvaluationDecision: claim.reEvaluationDecision ?? polledReEvaluationDecision,
+              permitToken: claim.permitToken,
+              ...claim.executionHashExpected ? { executionHashExpected: claim.executionHashExpected } : {},
+              ...claim.reEvaluationId ? { reEvaluationId: claim.reEvaluationId } : {},
+              ...claim.claimFailure ? { claimFailure: claim.claimFailure } : {}
             };
           }
         }
@@ -4968,6 +5000,35 @@ async function run() {
       }
     }
   }
+  const buildMandatoryClaimBody = async (row) => {
+    if (!productionChangePlan) {
+      throw new Error(`no change plan was derived for "${actionType}"`);
+    }
+    if (row.claimEnvironment != null && row.claimEnvironment !== environment) {
+      throw new Error(
+        `the approval must be claimed for environment "${row.claimEnvironment}", but this gate evaluated "${environment}"`
+      );
+    }
+    const claimer = await resolveProtectedActor({
+      apiKey,
+      apiUrl,
+      actionType,
+      environment,
+      triggeringActor: actor
+    });
+    if (!claimer.workloadIdentity) {
+      throw new Error("no verified workload identity could be minted for the claim");
+    }
+    if (claimer.actorId !== actorId) {
+      throw new Error(
+        `the re-minted actor "${claimer.actorId}" is not the actor that was evaluated ("${actorId}")`
+      );
+    }
+    return {
+      actor_identity: claimer.workloadIdentity.assertion,
+      change_plan: productionChangePlan
+    };
+  };
   setOutput("waited-for-approval", "false");
   let enforceResult;
   try {
@@ -4981,7 +5042,7 @@ async function run() {
     }
   } catch (err) {
     if (err instanceof import_enforce4.EnforceError) {
-      const canWaitForApproval = waitForApprovalInput && !evaluateOnly && err.phase === "verify" && (err.decision?.decision === "hold" || err.decision?.decision === "escalate") && !!err.decision?.approvalRequestId;
+      const canWaitForApproval = waitForApprovalInput && err.phase === "verify" && (err.decision?.decision === "hold" || err.decision?.decision === "escalate") && !!err.decision?.approvalRequestId;
       if (!canWaitForApproval) {
         await reportEnforceFailure(err);
         return;
@@ -4997,7 +5058,15 @@ async function run() {
           apiKey,
           apiUrl,
           approvalId: originalDecision.approvalRequestId,
-          maxWaitMs
+          maxWaitMs,
+          // Mandatory change-control actions claim with the EXECUTOR's own,
+          // freshly minted verified identity and the SAME change plan sent
+          // at evaluate, so the runtime's claim-time reevaluation binds the
+          // permit to this executor and this plan (a changed plan answers
+          // 409 change_plan_mismatch). Approval alone never authorizes
+          // execution: nothing is minted until this claim runs. Every other
+          // action keeps the legacy `{}` claim, unchanged.
+          ...MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType) ? { buildClaimBody: buildMandatoryClaimBody } : {}
         });
       } catch (waitErr) {
         await reportEnforceFailure(
@@ -5009,8 +5078,19 @@ async function run() {
         );
         return;
       }
-      if (resolution.status !== "approved" || !resolution.permitToken) {
-        const reason = `human approval resolved to '${resolution.status}'` + (resolution.reEvaluationDecision ? ` (fresh reevaluation: ${resolution.reEvaluationDecision})` : "") + " \u2014 deploy blocked (fail-closed).";
+      if (resolution.status !== "approved" && resolution.status !== "approved_awaiting_claim" || !resolution.permitToken) {
+        const reason = (resolution.claimFailure === "change_plan_mismatch" ? `human approval resolved to '${resolution.status}', but the claim was refused: the change plan presented at claim differs from the plan that was approved (change_plan_mismatch)` : `human approval resolved to '${resolution.status}'` + (resolution.claimFailure ? ` (permit claim failed: ${resolution.claimFailure})` : "")) + (resolution.reEvaluationDecision ? ` (fresh reevaluation: ${resolution.reEvaluationDecision})` : "") + " \u2014 deploy blocked (fail-closed).";
+        await reportEnforceFailure(
+          new import_enforce4.EnforceError(`Authorization DENIED: ${reason}`, "verify", {
+            ...originalDecision,
+            decision: "deny",
+            denyReason: reason
+          })
+        );
+        return;
+      }
+      if (MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType) && !resolution.executionHashExpected) {
+        const reason = "human approval was granted and a permit was claimed, but the claim response carried no execution_hash_expected, so the permit cannot be verified against its bound change plan \u2014 deploy blocked (fail-closed).";
         await reportEnforceFailure(
           new import_enforce4.EnforceError(`Authorization DENIED: ${reason}`, "verify", {
             ...originalDecision,
@@ -5023,24 +5103,54 @@ async function run() {
       const freshDecision = {
         ...originalDecision,
         decision: "allow",
-        permitToken: resolution.permitToken
+        permitToken: resolution.permitToken,
+        executionHashExpected: resolution.executionHashExpected,
+        ...resolution.reEvaluationId ? { evaluationId: resolution.reEvaluationId } : {}
       };
-      const vr = await (0, import_enforce4.verifyPermit)(config, freshDecision);
-      if (!vr.verified) {
-        await reportEnforceFailure(
-          new import_enforce4.EnforceError(
-            `Human approval was granted, but the fresh permit failed verification (${vr.outcome ?? "unknown"}) \u2014 deploy blocked (fail-closed).`,
-            "verify-permit",
-            freshDecision,
-            { outcome: vr.outcome, verifyErrorCode: vr.verifyErrorCode, mismatchFields: vr.mismatchFields }
-          )
+      if (evaluateOnly) {
+        info(
+          "AtlaSent Gate: human approval resolved \u2014 permit CLAIMED (not verified or consumed). Re-verify it at the execution boundary."
         );
-        return;
+        enforceResult = { result: void 0, decision: freshDecision, verifyOutcome: void 0 };
+      } else {
+        let vr;
+        try {
+          vr = await (0, import_enforce4.verifyPermit)(config, freshDecision);
+        } catch (verifyErr) {
+          await reportEnforceFailure(
+            verifyErr instanceof import_enforce4.EnforceError ? new import_enforce4.EnforceError(
+              `Human approval was granted, but the claimed permit failed verification: ${verifyErr.message}`,
+              "verify-permit",
+              freshDecision,
+              {
+                outcome: verifyErr.outcome,
+                verifyErrorCode: verifyErr.verifyErrorCode,
+                mismatchFields: verifyErr.mismatchFields
+              }
+            ) : new import_enforce4.EnforceError(
+              `Human approval was granted, but verifying the claimed permit failed: ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`,
+              "verify-permit",
+              freshDecision
+            )
+          );
+          return;
+        }
+        if (!vr.verified) {
+          await reportEnforceFailure(
+            new import_enforce4.EnforceError(
+              `Human approval was granted, but the fresh permit failed verification (${vr.outcome ?? "unknown"}) \u2014 deploy blocked (fail-closed).`,
+              "verify-permit",
+              freshDecision,
+              { outcome: vr.outcome, verifyErrorCode: vr.verifyErrorCode, mismatchFields: vr.mismatchFields }
+            )
+          );
+          return;
+        }
+        info(
+          `AtlaSent Gate: human approval resolved ALLOW \u2014 fresh permit verified (${vr.outcome ?? "verified"}). Proceeding.`
+        );
+        enforceResult = { result: void 0, decision: freshDecision, verifyOutcome: vr.outcome };
       }
-      info(
-        `AtlaSent Gate: human approval resolved ALLOW \u2014 fresh permit verified (${vr.outcome ?? "verified"}). Proceeding.`
-      );
-      enforceResult = { result: void 0, decision: freshDecision, verifyOutcome: vr.outcome };
     } else {
       setOutput("decision", "error");
       setOutput("permit-token", "");

@@ -173,7 +173,7 @@ function verify(decision) {
 // POST /v1/approvals/{id}/claim-permit, an atomic one-time claim (see
 // claimApprovalPermit above). Returns only on a terminal, non-"pending"
 // status:
-//   - status "approved": the caller should verify the returned permitToken
+//   - status "approved" / "approved_awaiting_claim": the caller should verify the returned permitToken
 //     (via verifyPermit — same fail-closed re-verification as any other
 //     allow) before proceeding. permitToken is undefined either if the
 //     approval was accepted but the runtime's own reevaluation did not
@@ -189,46 +189,77 @@ function verify(decision) {
 // thrown EnforceError — never a silent "treat as allow".
 // ---------------------------------------------------------------------------
 const APPROVAL_POLL_INTERVAL_MS = 5_000;
+/** Statuses on which a permit can be claimed. Everything else is terminal non-allow. */
+const CLAIMABLE_APPROVAL_STATUSES = new Set(["approved", "approved_awaiting_claim"]);
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 /**
  * One-time claim of the fresh permit token minted by an approved
- * resolution. Called exactly once, right after the status poll observes
- * `status === "approved"` — see waitForApprovalResolution below.
+ * resolution. Called exactly once, right after the status poll observes a
+ * claimable status ("approved", or IMPL-026B's "approved_awaiting_claim",
+ * whose reevaluation runs AT claim time against the claimer's identity) —
+ * see waitForApprovalResolution below.
  *
- * Fails closed by returning `undefined` (never throws) on any outcome
- * other than a genuine claim: network/parse failure, a non-200 response,
- * or `claimed: false` (already claimed by a concurrent poller, or the
- * reevaluation never minted a token — e.g. it produced hold/escalate/deny
- * despite the approval input itself being accepted, see IMPL-026A in
- * atlasent-api). The caller already treats an "approved" resolution with
- * no permitToken as non-allow, so under-claiming here is the safe
- * direction — it can never turn a real denial into an allow.
+ * Never throws for a claim outcome: network/parse failure, a non-200
+ * response (including 409 change_plan_mismatch), or `claimed: false` all
+ * return no permitToken plus a `claimFailure` code. The caller already
+ * treats a resolution with no permitToken as non-allow, so under-claiming
+ * here is the safe direction — it can never turn a denial into an allow.
+ * The one thing that DOES throw is a failure to build the claim body
+ * (buildClaimBody): an unbuildable body means the executor could not prove
+ * who it is, and that is reported as such rather than silently claiming
+ * with `{}`.
  */
-async function claimApprovalPermit(config, apiUrl) {
+async function claimApprovalPermit(config, apiUrl, row) {
     const url = `${apiUrl}/v1/approvals/${encodeURIComponent(config.approvalId)}/claim-permit`;
+    let requestBody = "{}";
+    if (config.buildClaimBody) {
+        let built;
+        try {
+            built = await config.buildClaimBody(row);
+        }
+        catch (err) {
+            throw new EnforceError(`Approval claim refused before sending: could not build the claim body ` +
+                `(${err instanceof Error ? err.message : String(err)}) — failing closed`, "evaluate");
+        }
+        requestBody = JSON.stringify(built);
+    }
     let status;
     let body;
     try {
-        ({ status, body } = await (0, transport_1.post)(url, "{}", { Authorization: `Bearer ${config.apiKey}` }));
+        ({ status, body } = await (0, transport_1.post)(url, requestBody, { Authorization: `Bearer ${config.apiKey}` }));
     }
     catch {
-        return undefined;
+        return { claimFailure: "unreachable" };
     }
-    if (status !== 200)
-        return undefined;
     let raw;
     try {
-        raw = JSON.parse(body);
+        const parsed = JSON.parse(body);
+        raw = parsed && typeof parsed === "object" ? parsed : undefined;
     }
     catch {
-        return undefined;
+        raw = undefined;
     }
-    if (raw["claimed"] !== true)
-        return undefined;
+    if (status !== 200) {
+        const code = raw && typeof raw["error"] === "string" ? raw["error"] : `HTTP ${status}`;
+        return { claimFailure: code };
+    }
+    if (!raw)
+        return { claimFailure: "malformed_response" };
+    const reEvaluationDecision = typeof raw["re_evaluation_decision"] === "string" ? raw["re_evaluation_decision"] : undefined;
     const permitToken = raw["permit_token"];
-    return typeof permitToken === "string" && permitToken.length > 0 ? permitToken : undefined;
+    if (raw["claimed"] !== true || typeof permitToken !== "string" || permitToken.length === 0) {
+        return { claimFailure: "not_claimed", reEvaluationDecision };
+    }
+    const hash = raw["execution_hash_expected"];
+    const reEvaluationId = raw["re_evaluation_id"];
+    return {
+        permitToken,
+        reEvaluationDecision,
+        executionHashExpected: typeof hash === "string" && hash.length > 0 ? hash : undefined,
+        reEvaluationId: typeof reEvaluationId === "string" && reEvaluationId.length > 0 ? reEvaluationId : undefined,
+    };
 }
 async function waitForApprovalResolution(config) {
     if (!config.approvalId) {
@@ -270,22 +301,29 @@ async function waitForApprovalResolution(config) {
             }
             const rowStatus = raw["status"];
             if (rowStatus && rowStatus !== "pending") {
-                const reEvaluationDecision = raw["re_evaluation_decision"];
+                const polledReEvaluationDecision = raw["re_evaluation_decision"];
                 // The status poll never carries the raw permit token (server-side
                 // redesign: a broadly-row-readable table must not hand out a live
-                // bearer off a plain GET). On the one terminal status that can ever
-                // have minted one, claim it exactly once via the companion
-                // claim-permit endpoint — an atomic clear-on-read RPC server-side,
-                // so a concurrent second poller/claim sees claimed:false rather than
-                // a re-served token. Every other terminal status (denied,
-                // denied_by_timeout, expired, ...) never had a token to claim.
-                const permitToken = rowStatus === "approved"
-                    ? await claimApprovalPermit(config, apiUrl)
-                    : undefined;
+                // bearer off a plain GET). On a claimable status, claim it exactly
+                // once via the companion claim-permit endpoint — an atomic,
+                // first-claim-wins operation server-side, so a concurrent second
+                // poller/claim gets no re-served token. "approved_awaiting_claim"
+                // (IMPL-026B) is claimable too: nothing is authorized until the
+                // claim-time reevaluation runs against the claimer's identity.
+                // Every other terminal status (denied, denied_by_timeout, expired,
+                // revoked, ...) never had a token to claim.
+                if (!CLAIMABLE_APPROVAL_STATUSES.has(rowStatus)) {
+                    return { status: rowStatus, reEvaluationDecision: polledReEvaluationDecision };
+                }
+                const claimEnvironment = typeof raw["claim_environment"] === "string" ? raw["claim_environment"] : undefined;
+                const claim = await claimApprovalPermit(config, apiUrl, { status: rowStatus, claimEnvironment });
                 return {
                     status: rowStatus,
-                    reEvaluationDecision,
-                    permitToken,
+                    reEvaluationDecision: claim.reEvaluationDecision ?? polledReEvaluationDecision,
+                    permitToken: claim.permitToken,
+                    ...(claim.executionHashExpected ? { executionHashExpected: claim.executionHashExpected } : {}),
+                    ...(claim.reEvaluationId ? { reEvaluationId: claim.reEvaluationId } : {}),
+                    ...(claim.claimFailure ? { claimFailure: claim.claimFailure } : {}),
                 };
             }
             // status === "pending" (or absent) — keep polling.
