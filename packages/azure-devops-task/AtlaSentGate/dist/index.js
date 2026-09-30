@@ -7533,30 +7533,55 @@ var require_dist = __commonJS({
       }
     }
     var APPROVAL_POLL_INTERVAL_MS = 5e3;
+    var CLAIMABLE_APPROVAL_STATUSES = /* @__PURE__ */ new Set(["approved", "approved_awaiting_claim"]);
     function sleep(ms) {
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
-    async function claimApprovalPermit(config, apiUrl) {
+    async function claimApprovalPermit(config, apiUrl, row) {
       const url = `${apiUrl}/v1/approvals/${encodeURIComponent(config.approvalId)}/claim-permit`;
+      let requestBody = "{}";
+      if (config.buildClaimBody) {
+        let built;
+        try {
+          built = await config.buildClaimBody(row);
+        } catch (err) {
+          throw new EnforceError2(`Approval claim refused before sending: could not build the claim body (${err instanceof Error ? err.message : String(err)}) \u2014 failing closed`, "evaluate");
+        }
+        requestBody = JSON.stringify(built);
+      }
       let status;
       let body;
       try {
-        ({ status, body } = await (0, transport_1.post)(url, "{}", { Authorization: `Bearer ${config.apiKey}` }));
+        ({ status, body } = await (0, transport_1.post)(url, requestBody, { Authorization: `Bearer ${config.apiKey}` }));
       } catch {
-        return void 0;
+        return { claimFailure: "unreachable" };
       }
-      if (status !== 200)
-        return void 0;
       let raw;
       try {
-        raw = JSON.parse(body);
+        const parsed = JSON.parse(body);
+        raw = parsed && typeof parsed === "object" ? parsed : void 0;
       } catch {
-        return void 0;
+        raw = void 0;
       }
-      if (raw["claimed"] !== true)
-        return void 0;
+      if (status !== 200) {
+        const code = raw && typeof raw["error"] === "string" ? raw["error"] : `HTTP ${status}`;
+        return { claimFailure: code };
+      }
+      if (!raw)
+        return { claimFailure: "malformed_response" };
+      const reEvaluationDecision = typeof raw["re_evaluation_decision"] === "string" ? raw["re_evaluation_decision"] : void 0;
       const permitToken = raw["permit_token"];
-      return typeof permitToken === "string" && permitToken.length > 0 ? permitToken : void 0;
+      if (raw["claimed"] !== true || typeof permitToken !== "string" || permitToken.length === 0) {
+        return { claimFailure: "not_claimed", reEvaluationDecision };
+      }
+      const hash = raw["execution_hash_expected"];
+      const reEvaluationId = raw["re_evaluation_id"];
+      return {
+        permitToken,
+        reEvaluationDecision,
+        executionHashExpected: typeof hash === "string" && hash.length > 0 ? hash : void 0,
+        reEvaluationId: typeof reEvaluationId === "string" && reEvaluationId.length > 0 ? reEvaluationId : void 0
+      };
     }
     async function waitForApprovalResolution2(config) {
       if (!config.approvalId) {
@@ -7590,12 +7615,19 @@ var require_dist = __commonJS({
           }
           const rowStatus = raw["status"];
           if (rowStatus && rowStatus !== "pending") {
-            const reEvaluationDecision = raw["re_evaluation_decision"];
-            const permitToken = rowStatus === "approved" ? await claimApprovalPermit(config, apiUrl) : void 0;
+            const polledReEvaluationDecision = raw["re_evaluation_decision"];
+            if (!CLAIMABLE_APPROVAL_STATUSES.has(rowStatus)) {
+              return { status: rowStatus, reEvaluationDecision: polledReEvaluationDecision };
+            }
+            const claimEnvironment = typeof raw["claim_environment"] === "string" ? raw["claim_environment"] : void 0;
+            const claim = await claimApprovalPermit(config, apiUrl, { status: rowStatus, claimEnvironment });
             return {
               status: rowStatus,
-              reEvaluationDecision,
-              permitToken
+              reEvaluationDecision: claim.reEvaluationDecision ?? polledReEvaluationDecision,
+              permitToken: claim.permitToken,
+              ...claim.executionHashExpected ? { executionHashExpected: claim.executionHashExpected } : {},
+              ...claim.reEvaluationId ? { reEvaluationId: claim.reEvaluationId } : {},
+              ...claim.claimFailure ? { claimFailure: claim.claimFailure } : {}
             };
           }
         }
