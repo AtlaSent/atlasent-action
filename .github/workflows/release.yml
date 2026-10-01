@@ -130,7 +130,7 @@ jobs:
         run: |
           cosign verify-blob \
             --bundle=dist/index.js.bundle \
-            --certificate-identity-regexp='https://github.com/Atlasent/atlasent-action/.github/workflows/release.yml@.*' \
+            --certificate-identity-regexp='https://github.com/(?i:atlasent)/atlasent-action/.github/workflows/release.yml@.*' \
             --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
             dist/index.js
 
