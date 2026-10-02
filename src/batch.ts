@@ -15,7 +15,7 @@
 // change in atlasent-api that is out of scope for this repo. The per-item
 // loop below is unaffected and remains the only batch behavior.
 
-import { verifyPermit, requiredBindingsFor } from "@atlasent/enforce";
+import { functionRegionHeaders, verifyPermit, requiredBindingsFor } from "@atlasent/enforce";
 import type { EvaluateRequest } from "./types";
 import type { Decision } from "./types";
 import { PRODUCTION_DEPLOY_ACTION } from "./canonicalAction";
@@ -169,6 +169,7 @@ export async function evaluateMany(
   const headers = {
     "content-type": "application/json",
     authorization: `Bearer ${apiKey}`,
+    ...functionRegionHeaders(apiUrl),
   };
 
   const { decisions, batchId } = await loopEvaluate(apiUrl, headers, items);

@@ -28,6 +28,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { functionRegionHeaders } from "@atlasent/enforce";
 
 export type EvidenceEventType =
   | "execution_started"
@@ -88,6 +89,7 @@ export async function emitEvidenceEvent(
       headers: {
         "Authorization": `Bearer ${cfg.apiKey}`,
         "Content-Type": "application/json",
+        ...functionRegionHeaders(url),
       },
       body: JSON.stringify(event),
       signal: controller.signal,

@@ -22,6 +22,7 @@
 // replace the authorization gate.
 
 import * as fs from "fs";
+import { functionRegionHeaders } from "@atlasent/enforce";
 
 const GITHUB_API_DEFAULT = "https://api.github.com";
 
@@ -733,6 +734,7 @@ export async function runChangeBrief(opts: RunChangeBriefOptions): Promise<RunCh
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${opts.apiKey}`,
+        ...functionRegionHeaders(url),
       },
       body: JSON.stringify({
         action_type: opts.actionType,

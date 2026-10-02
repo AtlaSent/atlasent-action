@@ -17,6 +17,8 @@
 //   { hash_match: boolean, rerun_score?: number, score_delta?: number,
 //     verdict_changed?: boolean, audit_id?: string }
 
+import { functionRegionHeaders } from "@atlasent/enforce";
+
 export interface VqpVerifyInputs {
   supabaseUrl: string;
   serviceRoleKey: string;
@@ -51,6 +53,7 @@ export async function runVqpVerify(
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${inputs.serviceRoleKey}`,
+      ...functionRegionHeaders(url),
     },
     body: JSON.stringify({
       snapshot_id: inputs.snapshotId,

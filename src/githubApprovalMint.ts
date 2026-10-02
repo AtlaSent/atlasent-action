@@ -27,6 +27,7 @@
  */
 
 import type { ApprovalSigningHint } from "@atlasent/enforce";
+import { functionRegionHeaders } from "@atlasent/enforce";
 
 export class GithubApprovalMintError extends Error {
   constructor(message: string) {
@@ -83,6 +84,7 @@ export async function mintGithubApprovalArtifacts(
     response = await fetchImpl(`${apiUrl}/v1-github-approval-mint`, {
       method: "POST",
       headers: {
+        ...functionRegionHeaders(apiUrl),
         Authorization: `Bearer ${args.apiKey}`,
         "Content-Type": "application/json",
         Accept: "application/json",

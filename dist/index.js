@@ -100,12 +100,69 @@ var require_transport = __commonJS({
   }
 });
 
+// packages/enforce/dist/functionRegion.js
+var require_functionRegion = __commonJS({
+  "packages/enforce/dist/functionRegion.js"(exports2) {
+    "use strict";
+    Object.defineProperty(exports2, "__esModule", { value: true });
+    exports2.FunctionRegionConfigError = exports2.HOSTED_RUNTIME_HOSTS = exports2.DEFAULT_FUNCTION_REGION = exports2.FUNCTION_REGION_ENV = exports2.FUNCTION_REGION_HEADER = void 0;
+    exports2.parseFunctionRegion = parseFunctionRegion2;
+    exports2.resolveFunctionRegion = resolveFunctionRegion;
+    exports2.functionRegionHeaders = functionRegionHeaders12;
+    exports2.FUNCTION_REGION_HEADER = "x-region";
+    exports2.FUNCTION_REGION_ENV = "ATLASENT_FUNCTION_REGION";
+    exports2.DEFAULT_FUNCTION_REGION = "us-west-1";
+    exports2.HOSTED_RUNTIME_HOSTS = /* @__PURE__ */ new Set([
+      "api.atlasent.io",
+      "kttccumlnmdtupgbyfue.supabase.co",
+      "lwnqpmnxpeyhpxvastku.supabase.co"
+    ]);
+    var REGION_ID = /^[a-z]{2}-[a-z]+-[0-9]$/;
+    var FunctionRegionConfigError = class extends Error {
+      constructor(value) {
+        super(`Invalid function region "${value}": expected a region id such as "${exports2.DEFAULT_FUNCTION_REGION}", or "auto" to let Supabase choose.`);
+        this.name = "FunctionRegionConfigError";
+      }
+    };
+    exports2.FunctionRegionConfigError = FunctionRegionConfigError;
+    function parseFunctionRegion2(value) {
+      const v = value.trim();
+      if (v === "auto")
+        return null;
+      if (REGION_ID.test(v))
+        return v;
+      throw new FunctionRegionConfigError(value);
+    }
+    function isHostedRuntime(url) {
+      try {
+        return exports2.HOSTED_RUNTIME_HOSTS.has(new URL(url).hostname.toLowerCase());
+      } catch {
+        return false;
+      }
+    }
+    function resolveFunctionRegion(url, explicit, env = process.env) {
+      if (explicit === null)
+        return null;
+      if (explicit !== void 0 && explicit.trim() !== "")
+        return parseFunctionRegion2(explicit);
+      const fromEnv = env[exports2.FUNCTION_REGION_ENV];
+      if (fromEnv !== void 0 && fromEnv.trim() !== "")
+        return parseFunctionRegion2(fromEnv);
+      return isHostedRuntime(url) ? exports2.DEFAULT_FUNCTION_REGION : null;
+    }
+    function functionRegionHeaders12(url, explicit, env = process.env) {
+      const region = resolveFunctionRegion(url, explicit, env);
+      return region ? { [exports2.FUNCTION_REGION_HEADER]: region } : {};
+    }
+  }
+});
+
 // packages/enforce/dist/index.js
 var require_dist = __commonJS({
   "packages/enforce/dist/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.CLOUD_LOCUS_CONTEXT_KEYS = exports2.EnforceError = void 0;
+    exports2.resolveFunctionRegion = exports2.parseFunctionRegion = exports2.functionRegionHeaders = exports2.HOSTED_RUNTIME_HOSTS = exports2.FunctionRegionConfigError = exports2.FUNCTION_REGION_HEADER = exports2.FUNCTION_REGION_ENV = exports2.DEFAULT_FUNCTION_REGION = exports2.CLOUD_LOCUS_CONTEXT_KEYS = exports2.EnforceError = void 0;
     exports2.evaluate = evaluate2;
     exports2.verify = verify2;
     exports2.waitForApprovalResolution = waitForApprovalResolution3;
@@ -114,7 +171,14 @@ var require_dist = __commonJS({
     exports2.reverifyPermit = reverifyPermit2;
     exports2.enforce = enforce2;
     var transport_1 = require_transport();
+    var functionRegion_1 = require_functionRegion();
     var DEFAULT_API_URL = "https://api.atlasent.io";
+    function runtimeHeaders(config, url) {
+      return {
+        Authorization: `Bearer ${config.apiKey}`,
+        ...(0, functionRegion_1.functionRegionHeaders)(url, config.functionRegion)
+      };
+    }
     var EnforceError2 = class extends Error {
       phase;
       decision;
@@ -180,9 +244,7 @@ var require_dist = __commonJS({
       let status;
       let body;
       try {
-        ({ status, body } = await (0, transport_1.post)(`${apiUrl}/v1-evaluate`, JSON.stringify(payload), {
-          Authorization: `Bearer ${config.apiKey}`
-        }));
+        ({ status, body } = await (0, transport_1.post)(`${apiUrl}/v1-evaluate`, JSON.stringify(payload), runtimeHeaders(config, apiUrl)));
       } catch (err) {
         throw new EnforceError2(`AtlaSent API unreachable: ${err instanceof Error ? err.message : String(err)}`, "evaluate");
       }
@@ -253,7 +315,7 @@ var require_dist = __commonJS({
       let status;
       let body;
       try {
-        ({ status, body } = await (0, transport_1.post)(url, requestBody, { Authorization: `Bearer ${config.apiKey}` }));
+        ({ status, body } = await (0, transport_1.post)(url, requestBody, runtimeHeaders(config, url)));
       } catch {
         return { claimFailure: "unreachable" };
       }
@@ -295,7 +357,7 @@ var require_dist = __commonJS({
         let status;
         let body;
         try {
-          ({ status, body } = await (0, transport_1.get)(url, { Authorization: `Bearer ${config.apiKey}` }));
+          ({ status, body } = await (0, transport_1.get)(url, runtimeHeaders(config, url)));
         } catch {
           await sleep(APPROVAL_POLL_INTERVAL_MS);
           continue;
@@ -366,9 +428,7 @@ var require_dist = __commonJS({
       let status;
       let body;
       try {
-        ({ status, body } = await (0, transport_1.post)(`${apiUrl}/v1-verify-permit`, JSON.stringify(bodyObj), {
-          Authorization: `Bearer ${config.apiKey}`
-        }));
+        ({ status, body } = await (0, transport_1.post)(`${apiUrl}/v1-verify-permit`, JSON.stringify(bodyObj), runtimeHeaders(config, apiUrl)));
       } catch (err) {
         throw new EnforceError2(`verify-permit unreachable: ${err instanceof Error ? err.message : String(err)}`, "verify-permit", decision);
       }
@@ -478,6 +538,31 @@ var require_dist = __commonJS({
         return flat;
       return void 0;
     }
+    var functionRegion_2 = require_functionRegion();
+    Object.defineProperty(exports2, "DEFAULT_FUNCTION_REGION", { enumerable: true, get: function() {
+      return functionRegion_2.DEFAULT_FUNCTION_REGION;
+    } });
+    Object.defineProperty(exports2, "FUNCTION_REGION_ENV", { enumerable: true, get: function() {
+      return functionRegion_2.FUNCTION_REGION_ENV;
+    } });
+    Object.defineProperty(exports2, "FUNCTION_REGION_HEADER", { enumerable: true, get: function() {
+      return functionRegion_2.FUNCTION_REGION_HEADER;
+    } });
+    Object.defineProperty(exports2, "FunctionRegionConfigError", { enumerable: true, get: function() {
+      return functionRegion_2.FunctionRegionConfigError;
+    } });
+    Object.defineProperty(exports2, "HOSTED_RUNTIME_HOSTS", { enumerable: true, get: function() {
+      return functionRegion_2.HOSTED_RUNTIME_HOSTS;
+    } });
+    Object.defineProperty(exports2, "functionRegionHeaders", { enumerable: true, get: function() {
+      return functionRegion_2.functionRegionHeaders;
+    } });
+    Object.defineProperty(exports2, "parseFunctionRegion", { enumerable: true, get: function() {
+      return functionRegion_2.parseFunctionRegion;
+    } });
+    Object.defineProperty(exports2, "resolveFunctionRegion", { enumerable: true, get: function() {
+      return functionRegion_2.resolveFunctionRegion;
+    } });
   }
 });
 
@@ -487,7 +572,8 @@ __export(src_exports, {
   run: () => run
 });
 module.exports = __toCommonJS(src_exports);
-var import_enforce4 = __toESM(require_dist());
+var import_enforce14 = __toESM(require_dist());
+var import_enforce15 = __toESM(require_dist());
 
 // src/gate.ts
 var GateInfraError = class extends Error {
@@ -499,7 +585,7 @@ var GateInfraError = class extends Error {
 };
 
 // src/v21.ts
-var import_enforce3 = __toESM(require_dist());
+var import_enforce5 = __toESM(require_dist());
 
 // src/batch.ts
 var import_enforce = __toESM(require_dist());
@@ -609,7 +695,8 @@ async function evaluateMany(apiUrl, apiKey, rawItems) {
   const items = bindTrustedStateSnapshot(rawItems);
   const headers = {
     "content-type": "application/json",
-    authorization: `Bearer ${apiKey}`
+    authorization: `Bearer ${apiKey}`,
+    ...(0, import_enforce.functionRegionHeaders)(apiUrl)
   };
   const { decisions, batchId } = await loopEvaluate(apiUrl, headers, items);
   const verified = await Promise.all(
@@ -764,6 +851,7 @@ async function waitForTerminalDecision(opts) {
 }
 
 // src/evidenceClient.ts
+var import_enforce3 = __toESM(require_dist());
 async function emitEvidenceEvent(cfg, event, log = console) {
   const url = `${cfg.apiUrl.replace(/\/$/, "")}${cfg.endpoint ?? "/v1-runtime-events"}`;
   const timeoutMs = cfg.timeoutMs ?? 5e3;
@@ -774,7 +862,8 @@ async function emitEvidenceEvent(cfg, event, log = console) {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${cfg.apiKey}`,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        ...(0, import_enforce3.functionRegionHeaders)(url)
       },
       body: JSON.stringify(event),
       signal: controller.signal
@@ -804,6 +893,7 @@ async function emitEvidenceEvent(cfg, event, log = console) {
 
 // src/workloadIdentity.ts
 var import_node_crypto = require("node:crypto");
+var import_enforce4 = __toESM(require_dist());
 var GITHUB_ACTIONS_OIDC_AUDIENCE = "atlasent:actor_identity.v1";
 var WORKLOAD_IDENTITY_REQUEST_TIMEOUT_MS = 3e4;
 var WorkloadIdentityError = class extends Error {
@@ -898,6 +988,7 @@ async function mintGithubActionsActorIdentity(args, deps = {}) {
     response = await resolved.fetchImpl(`${apiUrl}/v1-idp-broker/mint/actor-identity`, {
       method: "POST",
       headers: {
+        ...(0, import_enforce4.functionRegionHeaders)(apiUrl),
         Authorization: `Bearer ${args.apiKey}`,
         "Content-Type": "application/json",
         Accept: "application/json"
@@ -1079,7 +1170,7 @@ async function runV21(env, flags, deps = {}) {
       if (terminal.decision === "allow") {
         const item = boundItems[idx];
         const runtimeExecutionHash = terminal.executionHashExpected ?? terminal.execution_hash_expected ?? originalExecutionHash;
-        const vr = terminal.permitToken ? await (0, import_enforce3.verifyPermit)(
+        const vr = terminal.permitToken ? await (0, import_enforce5.verifyPermit)(
           {
             apiKey: inputs.apiKey,
             apiUrl: inputs.apiUrl,
@@ -1091,7 +1182,7 @@ async function runV21(env, flags, deps = {}) {
             environment: item.environment,
             targetId: item.target_id,
             executionPayloadHash: runtimeExecutionHash ?? item.execution_payload_hash,
-            requiredBindings: (0, import_enforce3.requiredBindingsFor)({
+            requiredBindings: (0, import_enforce5.requiredBindingsFor)({
               environment: item.environment,
               targetId: item.target_id,
               executionPayloadHash: runtimeExecutionHash ?? item.execution_payload_hash
@@ -1122,6 +1213,7 @@ async function runV21(env, flags, deps = {}) {
 // src/policySync.ts
 var fs = __toESM(require("fs"));
 var path = __toESM(require("path"));
+var import_enforce6 = __toESM(require_dist());
 async function runPolicySync(opts) {
   const { apiKey, apiUrl, bundlePath, source, commitSha, ref, dryRun } = opts;
   const workspace = process.env["GITHUB_WORKSPACE"] ?? ".";
@@ -1154,7 +1246,8 @@ async function runPolicySync(opts) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
+        Authorization: `Bearer ${apiKey}`,
+        ...(0, import_enforce6.functionRegionHeaders)(url)
       },
       body: JSON.stringify({
         policies,
@@ -1207,6 +1300,7 @@ function formatSyncDiff(run2) {
 var import_node_crypto2 = require("node:crypto");
 var fs2 = __toESM(require("node:fs"));
 var path2 = __toESM(require("node:path"));
+var import_enforce7 = __toESM(require_dist());
 var SEVERITY_RANK = {
   info: 1,
   low: 2,
@@ -1271,7 +1365,8 @@ async function invokeAgent(args) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${args.apiKey}`
+        Authorization: `Bearer ${args.apiKey}`,
+        ...(0, import_enforce7.functionRegionHeaders)(url)
       },
       body
     });
@@ -1727,6 +1822,7 @@ ${JSON.stringify(receiptPayload)}`;
 }
 
 // src/postDeployEvidenceBundle.ts
+var import_enforce8 = __toESM(require_dist());
 var VALID_EVIDENCE_REGIMES = /* @__PURE__ */ new Set([
   "soc2_type_ii",
   "hipaa",
@@ -1755,6 +1851,7 @@ async function callPostDeployEvidenceBundle(args, log, timeoutMs = 3e4) {
       headers: {
         "Authorization": `Bearer ${args.apiKey}`,
         "Content-Type": "application/json",
+        ...(0, import_enforce8.functionRegionHeaders)(url),
         ...args.actor ? { "X-AtlaSent-Actor": args.actor } : {}
       },
       body: JSON.stringify(body),
@@ -1799,6 +1896,7 @@ function normalizeExecutionPayloadHash(digest) {
 }
 
 // src/vqpVerify.ts
+var import_enforce9 = __toESM(require_dist());
 async function runVqpVerify(inputs, fetchFn = globalThis.fetch) {
   const base = inputs.supabaseUrl.replace(/\/$/, "");
   const url = `${base}/functions/v1/v1-verify-vqp`;
@@ -1806,7 +1904,8 @@ async function runVqpVerify(inputs, fetchFn = globalThis.fetch) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${inputs.serviceRoleKey}`
+      Authorization: `Bearer ${inputs.serviceRoleKey}`,
+      ...(0, import_enforce9.functionRegionHeaders)(url)
     },
     body: JSON.stringify({
       snapshot_id: inputs.snapshotId,
@@ -2071,6 +2170,7 @@ function buildGateStepSummary(input) {
 
 // src/changeBrief.ts
 var fs3 = __toESM(require("fs"));
+var import_enforce10 = __toESM(require_dist());
 var GITHUB_API_DEFAULT = "https://api.github.com";
 function canonicalize(value) {
   if (value === null || typeof value !== "object")
@@ -2398,7 +2498,8 @@ async function runChangeBrief(opts) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${opts.apiKey}`
+        Authorization: `Bearer ${opts.apiKey}`,
+        ...(0, import_enforce10.functionRegionHeaders)(url)
       },
       body: JSON.stringify({
         action_type: opts.actionType,
@@ -2612,6 +2713,7 @@ function renderChangeBriefStepSummary(result) {
 }
 
 // src/soloOperatorAttest.ts
+var import_enforce11 = __toESM(require_dist());
 var SOLO_OPERATOR_ATTEST_ACTION_TYPE = "solo_operator.attest";
 var SoloOperatorAttestError = class extends Error {
   constructor(message) {
@@ -2682,6 +2784,7 @@ async function attestSoloOperator(args, deps = {}) {
     response = await resolved.fetchImpl(`${apiUrl}/v1-solo-operator-attest`, {
       method: "POST",
       headers: {
+        ...(0, import_enforce11.functionRegionHeaders)(apiUrl),
         Authorization: `Bearer ${args.apiKey}`,
         "Content-Type": "application/json",
         Accept: "application/json"
@@ -2726,6 +2829,7 @@ async function attestSoloOperator(args, deps = {}) {
 }
 
 // src/githubApprovalMint.ts
+var import_enforce12 = __toESM(require_dist());
 var GithubApprovalMintError = class extends Error {
   constructor(message) {
     super(message);
@@ -2749,6 +2853,7 @@ async function mintGithubApprovalArtifacts(args, deps = {}) {
     response = await fetchImpl(`${apiUrl}/v1-github-approval-mint`, {
       method: "POST",
       headers: {
+        ...(0, import_enforce12.functionRegionHeaders)(apiUrl),
         Authorization: `Bearer ${args.apiKey}`,
         "Content-Type": "application/json",
         Accept: "application/json"
@@ -3377,6 +3482,7 @@ function renderPostureStepSummary(result) {
 }
 
 // src/insights.ts
+var import_enforce13 = __toESM(require_dist());
 async function runInsightsEvaluate(cfg, log = console) {
   try {
     const res = await fetch(
@@ -3385,7 +3491,8 @@ async function runInsightsEvaluate(cfg, log = console) {
         method: "POST",
         headers: {
           Authorization: `Bearer ${cfg.apiKey}`,
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          ...(0, import_enforce13.functionRegionHeaders)(cfg.apiUrl)
         },
         body: JSON.stringify({
           subjectId: cfg.subjectId,
@@ -3902,7 +4009,7 @@ async function runVerifyPermitStep(apiKey, apiUrl) {
     ...boundaryContext ? { context: boundaryContext } : {},
     // Boundary re-verify must re-present every binding it was given, or fail
     // closed (MISSING_BINDING) — never a silently-unbound boundary verify.
-    requiredBindings: (0, import_enforce4.requiredBindingsFor)({
+    requiredBindings: (0, import_enforce14.requiredBindingsFor)({
       environment,
       targetId,
       executionPayloadHash: verificationPayloadHash
@@ -3912,7 +4019,7 @@ async function runVerifyPermitStep(apiKey, apiUrl) {
     `AtlaSent boundary re-verification: "${actionType}" for "${actorId}" in ${environment}` + (artifactDigest ? ` (artifact=${artifactDigest})` : "")
   );
   try {
-    const r = await (0, import_enforce4.reverifyPermit)(config, permitToken);
+    const r = await (0, import_enforce14.reverifyPermit)(config, permitToken);
     setOutput("decision", "allow");
     setOutput("verified", "true");
     setOutput("verify-outcome", r.outcome ?? "verified");
@@ -3926,7 +4033,7 @@ async function runVerifyPermitStep(apiKey, apiUrl) {
   } catch (err) {
     setOutput("decision", "deny");
     setOutput("verified", "false");
-    if (err instanceof import_enforce4.EnforceError) {
+    if (err instanceof import_enforce14.EnforceError) {
       setOutput("verify-outcome", err.outcome ?? "invalid");
       setOutput("verify-error-code", err.verifyErrorCode ?? "");
       setFailed(
@@ -4504,6 +4611,20 @@ async function run() {
     );
     return;
   }
+  const functionRegionInput = getInput("function-region");
+  try {
+    if (functionRegionInput) {
+      (0, import_enforce15.parseFunctionRegion)(functionRegionInput);
+      process.env[import_enforce15.FUNCTION_REGION_ENV] = functionRegionInput.trim();
+    } else if (process.env[import_enforce15.FUNCTION_REGION_ENV]?.trim()) {
+      (0, import_enforce15.parseFunctionRegion)(process.env[import_enforce15.FUNCTION_REGION_ENV]);
+    }
+  } catch (err) {
+    setOutput("decision", "error");
+    setOutput("verified", "false");
+    setFailed(`AtlaSent Gate: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
   if (getInput("release-mode") === "register-and-verify") {
     await runReleaseModeStep();
     return;
@@ -4571,7 +4692,7 @@ async function run() {
         { mask: maskValue }
       );
     } catch (err) {
-      const msg = err instanceof import_enforce4.EnforceError || err instanceof GateInfraError || err instanceof WorkloadIdentityError ? err.message : `Unexpected error: ${err instanceof Error ? err.message : String(err)}`;
+      const msg = err instanceof import_enforce14.EnforceError || err instanceof GateInfraError || err instanceof WorkloadIdentityError ? err.message : `Unexpected error: ${err instanceof Error ? err.message : String(err)}`;
       setOutput("verified", "false");
       setOutput("decisions", "[]");
       setOutput("batch-id", "");
@@ -4796,7 +4917,7 @@ async function run() {
     executionPayloadHash: directExecutionPayloadHash,
     // Re-present every binding provided here at verify, or fail closed
     // (MISSING_BINDING) rather than silently drop it.
-    requiredBindings: (0, import_enforce4.requiredBindingsFor)({
+    requiredBindings: (0, import_enforce14.requiredBindingsFor)({
       environment,
       targetId,
       executionPayloadHash: directExecutionPayloadHash
@@ -5033,15 +5154,15 @@ async function run() {
   let enforceResult;
   try {
     if (evaluateOnly) {
-      const decision = await (0, import_enforce4.evaluate)(config);
-      (0, import_enforce4.verify)(decision);
+      const decision = await (0, import_enforce14.evaluate)(config);
+      (0, import_enforce14.verify)(decision);
       enforceResult = { result: void 0, decision, verifyOutcome: void 0 };
     } else {
-      enforceResult = await (0, import_enforce4.enforce)(config, async () => {
+      enforceResult = await (0, import_enforce14.enforce)(config, async () => {
       });
     }
   } catch (err) {
-    if (err instanceof import_enforce4.EnforceError) {
+    if (err instanceof import_enforce14.EnforceError) {
       const canWaitForApproval = waitForApprovalInput && err.phase === "verify" && (err.decision?.decision === "hold" || err.decision?.decision === "escalate") && !!err.decision?.approvalRequestId;
       if (!canWaitForApproval) {
         await reportEnforceFailure(err);
@@ -5054,7 +5175,7 @@ async function run() {
       );
       let resolution;
       try {
-        resolution = await (0, import_enforce4.waitForApprovalResolution)({
+        resolution = await (0, import_enforce14.waitForApprovalResolution)({
           apiKey,
           apiUrl,
           approvalId: originalDecision.approvalRequestId,
@@ -5070,7 +5191,7 @@ async function run() {
         });
       } catch (waitErr) {
         await reportEnforceFailure(
-          waitErr instanceof import_enforce4.EnforceError ? new import_enforce4.EnforceError(waitErr.message, "evaluate", originalDecision) : new import_enforce4.EnforceError(
+          waitErr instanceof import_enforce14.EnforceError ? new import_enforce14.EnforceError(waitErr.message, "evaluate", originalDecision) : new import_enforce14.EnforceError(
             `Approval wait failed: ${waitErr instanceof Error ? waitErr.message : String(waitErr)}`,
             "evaluate",
             originalDecision
@@ -5081,7 +5202,7 @@ async function run() {
       if (resolution.status !== "approved" && resolution.status !== "approved_awaiting_claim" || !resolution.permitToken) {
         const reason = (resolution.claimFailure === "change_plan_mismatch" ? `human approval resolved to '${resolution.status}', but the claim was refused: the change plan presented at claim differs from the plan that was approved (change_plan_mismatch)` : `human approval resolved to '${resolution.status}'` + (resolution.claimFailure ? ` (permit claim failed: ${resolution.claimFailure})` : "")) + (resolution.reEvaluationDecision ? ` (fresh reevaluation: ${resolution.reEvaluationDecision})` : "") + " \u2014 deploy blocked (fail-closed).";
         await reportEnforceFailure(
-          new import_enforce4.EnforceError(`Authorization DENIED: ${reason}`, "verify", {
+          new import_enforce14.EnforceError(`Authorization DENIED: ${reason}`, "verify", {
             ...originalDecision,
             decision: "deny",
             denyReason: reason
@@ -5092,7 +5213,7 @@ async function run() {
       if (MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType) && !resolution.executionHashExpected) {
         const reason = "human approval was granted and a permit was claimed, but the claim response carried no execution_hash_expected, so the permit cannot be verified against its bound change plan \u2014 deploy blocked (fail-closed).";
         await reportEnforceFailure(
-          new import_enforce4.EnforceError(`Authorization DENIED: ${reason}`, "verify", {
+          new import_enforce14.EnforceError(`Authorization DENIED: ${reason}`, "verify", {
             ...originalDecision,
             decision: "deny",
             denyReason: reason
@@ -5115,10 +5236,10 @@ async function run() {
       } else {
         let vr;
         try {
-          vr = await (0, import_enforce4.verifyPermit)(config, freshDecision);
+          vr = await (0, import_enforce14.verifyPermit)(config, freshDecision);
         } catch (verifyErr) {
           await reportEnforceFailure(
-            verifyErr instanceof import_enforce4.EnforceError ? new import_enforce4.EnforceError(
+            verifyErr instanceof import_enforce14.EnforceError ? new import_enforce14.EnforceError(
               `Human approval was granted, but the claimed permit failed verification: ${verifyErr.message}`,
               "verify-permit",
               freshDecision,
@@ -5127,7 +5248,7 @@ async function run() {
                 verifyErrorCode: verifyErr.verifyErrorCode,
                 mismatchFields: verifyErr.mismatchFields
               }
-            ) : new import_enforce4.EnforceError(
+            ) : new import_enforce14.EnforceError(
               `Human approval was granted, but verifying the claimed permit failed: ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`,
               "verify-permit",
               freshDecision
@@ -5137,7 +5258,7 @@ async function run() {
         }
         if (!vr.verified) {
           await reportEnforceFailure(
-            new import_enforce4.EnforceError(
+            new import_enforce14.EnforceError(
               `Human approval was granted, but the fresh permit failed verification (${vr.outcome ?? "unknown"}) \u2014 deploy blocked (fail-closed).`,
               "verify-permit",
               freshDecision,

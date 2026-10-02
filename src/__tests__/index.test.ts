@@ -217,6 +217,48 @@ function getExitCalls(): Array<number | string | null | undefined> {
 }
 
 // ---------------------------------------------------------------------------
+// Edge-function region input (@atlasent/enforce functionRegion)
+// ---------------------------------------------------------------------------
+
+describe("function-region input", () => {
+  const saved = process.env.ATLASENT_FUNCTION_REGION;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.ATLASENT_FUNCTION_REGION;
+    else process.env.ATLASENT_FUNCTION_REGION = saved;
+  });
+
+  it("fails the step on a malformed region before any evaluate call", async () => {
+    setApiKey();
+    setInput("action", "production.deploy");
+    setInput("function-region", "US-WEST-1");
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(getExitCalls()).toContain(1);
+    expect(mockEnforce).not.toHaveBeenCalled();
+    expect(mockEvaluate).not.toHaveBeenCalled();
+    expect(getConsoleLogs().some((l) => l.includes("Invalid function region"))).toBe(true);
+    expect(readOutputs(outputFile)["decision"]).toBe("error");
+  });
+
+  it("fails the step on a malformed ATLASENT_FUNCTION_REGION too", async () => {
+    setApiKey();
+    setInput("action", "production.deploy");
+    process.env.ATLASENT_FUNCTION_REGION = "west";
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(mockEnforce).not.toHaveBeenCalled();
+    expect(mockEvaluate).not.toHaveBeenCalled();
+  });
+
+  it("exports a valid input as ATLASENT_FUNCTION_REGION for every runtime call", async () => {
+    setInput("function-region", " us-east-1 ");
+    // No API key: the run stops after the region is applied, before any call.
+    await run().catch(() => undefined);
+    expect(process.env.ATLASENT_FUNCTION_REGION).toBe("us-east-1");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 0. Legacy trajectory-verify inputs — fail closed before any mode dispatch
 // ---------------------------------------------------------------------------
 

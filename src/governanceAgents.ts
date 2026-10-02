@@ -25,6 +25,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { functionRegionHeaders } from "@atlasent/enforce";
 
 export type AgentSeverity = "info" | "low" | "medium" | "high" | "blocker";
 
@@ -186,6 +187,7 @@ async function invokeAgent(args: InvokeArgs): Promise<InvokeAgentResponse> {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${args.apiKey}`,
+        ...functionRegionHeaders(url),
       },
       body,
     });

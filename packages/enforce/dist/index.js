@@ -7,7 +7,7 @@
 //   3. verifyPermit() — calls POST /v1-verify-permit; replay/expired tokens block
 //   4. enforce()      — composes all three; fn never runs unless all steps pass
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CLOUD_LOCUS_CONTEXT_KEYS = exports.EnforceError = void 0;
+exports.resolveFunctionRegion = exports.parseFunctionRegion = exports.functionRegionHeaders = exports.HOSTED_RUNTIME_HOSTS = exports.FunctionRegionConfigError = exports.FUNCTION_REGION_HEADER = exports.FUNCTION_REGION_ENV = exports.DEFAULT_FUNCTION_REGION = exports.CLOUD_LOCUS_CONTEXT_KEYS = exports.EnforceError = void 0;
 exports.evaluate = evaluate;
 exports.verify = verify;
 exports.waitForApprovalResolution = waitForApprovalResolution;
@@ -16,7 +16,15 @@ exports.verifyPermit = verifyPermit;
 exports.reverifyPermit = reverifyPermit;
 exports.enforce = enforce;
 const transport_1 = require("./transport");
+const functionRegion_1 = require("./functionRegion");
 const DEFAULT_API_URL = "https://api.atlasent.io";
+/** Authorization plus region headers for one runtime request. */
+function runtimeHeaders(config, url) {
+    return {
+        Authorization: `Bearer ${config.apiKey}`,
+        ...(0, functionRegion_1.functionRegionHeaders)(url, config.functionRegion),
+    };
+}
 class EnforceError extends Error {
     phase;
     decision;
@@ -90,9 +98,7 @@ async function evaluate(config) {
     let status;
     let body;
     try {
-        ({ status, body } = await (0, transport_1.post)(`${apiUrl}/v1-evaluate`, JSON.stringify(payload), {
-            Authorization: `Bearer ${config.apiKey}`,
-        }));
+        ({ status, body } = await (0, transport_1.post)(`${apiUrl}/v1-evaluate`, JSON.stringify(payload), runtimeHeaders(config, apiUrl)));
     }
     catch (err) {
         throw new EnforceError(`AtlaSent API unreachable: ${err instanceof Error ? err.message : String(err)}`, "evaluate");
@@ -228,7 +234,7 @@ async function claimApprovalPermit(config, apiUrl, row) {
     let status;
     let body;
     try {
-        ({ status, body } = await (0, transport_1.post)(url, requestBody, { Authorization: `Bearer ${config.apiKey}` }));
+        ({ status, body } = await (0, transport_1.post)(url, requestBody, runtimeHeaders(config, url)));
     }
     catch {
         return { claimFailure: "unreachable" };
@@ -272,7 +278,7 @@ async function waitForApprovalResolution(config) {
         let status;
         let body;
         try {
-            ({ status, body } = await (0, transport_1.get)(url, { Authorization: `Bearer ${config.apiKey}` }));
+            ({ status, body } = await (0, transport_1.get)(url, runtimeHeaders(config, url)));
         }
         catch {
             // Transient network failure — swallow and retry on the next tick,
@@ -388,9 +394,7 @@ async function postVerify(config, permitToken, decision) {
     let status;
     let body;
     try {
-        ({ status, body } = await (0, transport_1.post)(`${apiUrl}/v1-verify-permit`, JSON.stringify(bodyObj), {
-            Authorization: `Bearer ${config.apiKey}`,
-        }));
+        ({ status, body } = await (0, transport_1.post)(`${apiUrl}/v1-verify-permit`, JSON.stringify(bodyObj), runtimeHeaders(config, apiUrl)));
     }
     catch (err) {
         throw new EnforceError(`verify-permit unreachable: ${err instanceof Error ? err.message : String(err)}`, "verify-permit", decision);
@@ -526,3 +530,12 @@ function extractRiskScore(raw) {
         return flat;
     return undefined;
 }
+var functionRegion_2 = require("./functionRegion");
+Object.defineProperty(exports, "DEFAULT_FUNCTION_REGION", { enumerable: true, get: function () { return functionRegion_2.DEFAULT_FUNCTION_REGION; } });
+Object.defineProperty(exports, "FUNCTION_REGION_ENV", { enumerable: true, get: function () { return functionRegion_2.FUNCTION_REGION_ENV; } });
+Object.defineProperty(exports, "FUNCTION_REGION_HEADER", { enumerable: true, get: function () { return functionRegion_2.FUNCTION_REGION_HEADER; } });
+Object.defineProperty(exports, "FunctionRegionConfigError", { enumerable: true, get: function () { return functionRegion_2.FunctionRegionConfigError; } });
+Object.defineProperty(exports, "HOSTED_RUNTIME_HOSTS", { enumerable: true, get: function () { return functionRegion_2.HOSTED_RUNTIME_HOSTS; } });
+Object.defineProperty(exports, "functionRegionHeaders", { enumerable: true, get: function () { return functionRegion_2.functionRegionHeaders; } });
+Object.defineProperty(exports, "parseFunctionRegion", { enumerable: true, get: function () { return functionRegion_2.parseFunctionRegion; } });
+Object.defineProperty(exports, "resolveFunctionRegion", { enumerable: true, get: function () { return functionRegion_2.resolveFunctionRegion; } });

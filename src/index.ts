@@ -32,6 +32,7 @@ import {
   EnforceError,
 } from "@atlasent/enforce";
 import type { ApprovalSigningHint, Decision, EnforceConfig } from "@atlasent/enforce";
+import { FUNCTION_REGION_ENV, parseFunctionRegion } from "@atlasent/enforce";
 import { GateInfraError } from "./gate";
 import { runV21 } from "./v21";
 import { runPolicySync } from "./policySync";
@@ -1640,6 +1641,26 @@ export async function run(): Promise<void> {
         `${trajectoryInputsSet.join(", ")} from this step's inputs. Use the evaluate-only + ` +
         `verify-permit execution-boundary pattern instead — see docs/trajectory-verify.md.`,
     );
+    return;
+  }
+
+  // ── Edge-function region (see @atlasent/enforce functionRegion) ─────────────
+  // The `function-region` input overrides ATLASENT_FUNCTION_REGION. It is
+  // validated here, before any request, so a typo fails the step instead of
+  // quietly leaving every call unpinned. Every runtime request then resolves
+  // the region through functionRegionHeaders(), which reads this variable.
+  const functionRegionInput = getInput("function-region");
+  try {
+    if (functionRegionInput) {
+      parseFunctionRegion(functionRegionInput);
+      process.env[FUNCTION_REGION_ENV] = functionRegionInput.trim();
+    } else if (process.env[FUNCTION_REGION_ENV]?.trim()) {
+      parseFunctionRegion(process.env[FUNCTION_REGION_ENV] as string);
+    }
+  } catch (err) {
+    setOutput("decision", "error");
+    setOutput("verified", "false");
+    setFailed(`AtlaSent Gate: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
 
