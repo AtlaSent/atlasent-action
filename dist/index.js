@@ -105,7 +105,7 @@ var require_functionRegion = __commonJS({
   "packages/enforce/dist/functionRegion.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.FunctionRegionConfigError = exports2.HOSTED_RUNTIME_HOSTS = exports2.DEFAULT_FUNCTION_REGION = exports2.FUNCTION_REGION_ENV = exports2.FUNCTION_REGION_HEADER = void 0;
+    exports2.FunctionRegionConfigError = exports2.SUPPORTED_FUNCTION_REGIONS = exports2.HOSTED_RUNTIME_HOSTS = exports2.DEFAULT_FUNCTION_REGION = exports2.FUNCTION_REGION_ENV = exports2.FUNCTION_REGION_HEADER = void 0;
     exports2.parseFunctionRegion = parseFunctionRegion2;
     exports2.resolveFunctionRegion = resolveFunctionRegion;
     exports2.functionRegionHeaders = functionRegionHeaders12;
@@ -117,10 +117,25 @@ var require_functionRegion = __commonJS({
       "kttccumlnmdtupgbyfue.supabase.co",
       "lwnqpmnxpeyhpxvastku.supabase.co"
     ]);
-    var REGION_ID = /^[a-z]{2}-[a-z]+-[0-9]$/;
+    exports2.SUPPORTED_FUNCTION_REGIONS = /* @__PURE__ */ new Set([
+      "ap-northeast-1",
+      "ap-northeast-2",
+      "ap-south-1",
+      "ap-southeast-1",
+      "ap-southeast-2",
+      "ca-central-1",
+      "us-east-1",
+      "us-west-1",
+      "us-west-2",
+      "eu-central-1",
+      "eu-west-1",
+      "eu-west-2",
+      "eu-west-3",
+      "sa-east-1"
+    ]);
     var FunctionRegionConfigError = class extends Error {
       constructor(value) {
-        super(`Invalid function region "${value}": expected a region id such as "${exports2.DEFAULT_FUNCTION_REGION}", or "auto" to let Supabase choose.`);
+        super(`Invalid function region "${value}": expected a supported region such as "${exports2.DEFAULT_FUNCTION_REGION}", or "auto" to let Supabase choose.`);
         this.name = "FunctionRegionConfigError";
       }
     };
@@ -129,7 +144,7 @@ var require_functionRegion = __commonJS({
       const v = value.trim();
       if (v === "auto")
         return null;
-      if (REGION_ID.test(v))
+      if (exports2.SUPPORTED_FUNCTION_REGIONS.has(v))
         return v;
       throw new FunctionRegionConfigError(value);
     }

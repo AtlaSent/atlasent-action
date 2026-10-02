@@ -6,6 +6,7 @@ import {
   functionRegionHeaders,
   parseFunctionRegion,
   resolveFunctionRegion,
+  SUPPORTED_FUNCTION_REGIONS,
 } from "../functionRegion";
 
 const HOSTED = "https://kttccumlnmdtupgbyfue.supabase.co/functions/v1";
@@ -53,7 +54,7 @@ describe("resolveFunctionRegion", () => {
 
   it("treats an empty explicit value as unset", () => {
     expect(resolveFunctionRegion(HOSTED, "", NO_ENV)).toBe("us-west-1");
-    expect(resolveFunctionRegion(HOSTED, "  ", { [FUNCTION_REGION_ENV]: "us-east-2" })).toBe("us-east-2");
+    expect(resolveFunctionRegion(HOSTED, "  ", { [FUNCTION_REGION_ENV]: "ca-central-1" })).toBe("ca-central-1");
     expect(resolveFunctionRegion(HOSTED, undefined, { [FUNCTION_REGION_ENV]: "" })).toBe("us-west-1");
   });
 
@@ -71,6 +72,19 @@ describe("resolveFunctionRegion", () => {
     expect(() => resolveFunctionRegion(HOSTED, undefined, { [FUNCTION_REGION_ENV]: "nope" })).toThrow(
       FunctionRegionConfigError,
     );
+  });
+
+  it("rejects a well-formed region Supabase does not support", () => {
+    // A pattern check would accept these; a typo must not silently go unpinned.
+    for (const bad of ["us-wset-1", "us-east-2", "eu-north-1", "xx-yyyy-9"]) {
+      expect(() => parseFunctionRegion(bad)).toThrow(FunctionRegionConfigError);
+    }
+  });
+
+  it("accepts every region Supabase documents for x-region", () => {
+    expect(SUPPORTED_FUNCTION_REGIONS.size).toBe(14);
+    for (const r of SUPPORTED_FUNCTION_REGIONS) expect(parseFunctionRegion(r)).toBe(r);
+    expect(SUPPORTED_FUNCTION_REGIONS.has(DEFAULT_FUNCTION_REGION)).toBe(true);
   });
 
   it("trims surrounding whitespace", () => {

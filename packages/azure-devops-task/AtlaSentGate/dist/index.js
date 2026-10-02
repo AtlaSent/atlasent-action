@@ -7399,12 +7399,84 @@ var require_transport = __commonJS({
   }
 });
 
+// ../enforce/dist/functionRegion.js
+var require_functionRegion = __commonJS({
+  "../enforce/dist/functionRegion.js"(exports2) {
+    "use strict";
+    Object.defineProperty(exports2, "__esModule", { value: true });
+    exports2.FunctionRegionConfigError = exports2.SUPPORTED_FUNCTION_REGIONS = exports2.HOSTED_RUNTIME_HOSTS = exports2.DEFAULT_FUNCTION_REGION = exports2.FUNCTION_REGION_ENV = exports2.FUNCTION_REGION_HEADER = void 0;
+    exports2.parseFunctionRegion = parseFunctionRegion;
+    exports2.resolveFunctionRegion = resolveFunctionRegion;
+    exports2.functionRegionHeaders = functionRegionHeaders;
+    exports2.FUNCTION_REGION_HEADER = "x-region";
+    exports2.FUNCTION_REGION_ENV = "ATLASENT_FUNCTION_REGION";
+    exports2.DEFAULT_FUNCTION_REGION = "us-west-1";
+    exports2.HOSTED_RUNTIME_HOSTS = /* @__PURE__ */ new Set([
+      "api.atlasent.io",
+      "kttccumlnmdtupgbyfue.supabase.co",
+      "lwnqpmnxpeyhpxvastku.supabase.co"
+    ]);
+    exports2.SUPPORTED_FUNCTION_REGIONS = /* @__PURE__ */ new Set([
+      "ap-northeast-1",
+      "ap-northeast-2",
+      "ap-south-1",
+      "ap-southeast-1",
+      "ap-southeast-2",
+      "ca-central-1",
+      "us-east-1",
+      "us-west-1",
+      "us-west-2",
+      "eu-central-1",
+      "eu-west-1",
+      "eu-west-2",
+      "eu-west-3",
+      "sa-east-1"
+    ]);
+    var FunctionRegionConfigError = class extends Error {
+      constructor(value) {
+        super(`Invalid function region "${value}": expected a supported region such as "${exports2.DEFAULT_FUNCTION_REGION}", or "auto" to let Supabase choose.`);
+        this.name = "FunctionRegionConfigError";
+      }
+    };
+    exports2.FunctionRegionConfigError = FunctionRegionConfigError;
+    function parseFunctionRegion(value) {
+      const v = value.trim();
+      if (v === "auto")
+        return null;
+      if (exports2.SUPPORTED_FUNCTION_REGIONS.has(v))
+        return v;
+      throw new FunctionRegionConfigError(value);
+    }
+    function isHostedRuntime(url) {
+      try {
+        return exports2.HOSTED_RUNTIME_HOSTS.has(new URL(url).hostname.toLowerCase());
+      } catch {
+        return false;
+      }
+    }
+    function resolveFunctionRegion(url, explicit, env = process.env) {
+      if (explicit === null)
+        return null;
+      if (explicit !== void 0 && explicit.trim() !== "")
+        return parseFunctionRegion(explicit);
+      const fromEnv = env[exports2.FUNCTION_REGION_ENV];
+      if (fromEnv !== void 0 && fromEnv.trim() !== "")
+        return parseFunctionRegion(fromEnv);
+      return isHostedRuntime(url) ? exports2.DEFAULT_FUNCTION_REGION : null;
+    }
+    function functionRegionHeaders(url, explicit, env = process.env) {
+      const region = resolveFunctionRegion(url, explicit, env);
+      return region ? { [exports2.FUNCTION_REGION_HEADER]: region } : {};
+    }
+  }
+});
+
 // ../enforce/dist/index.js
 var require_dist = __commonJS({
   "../enforce/dist/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.CLOUD_LOCUS_CONTEXT_KEYS = exports2.EnforceError = void 0;
+    exports2.resolveFunctionRegion = exports2.parseFunctionRegion = exports2.functionRegionHeaders = exports2.HOSTED_RUNTIME_HOSTS = exports2.FunctionRegionConfigError = exports2.FUNCTION_REGION_HEADER = exports2.FUNCTION_REGION_ENV = exports2.DEFAULT_FUNCTION_REGION = exports2.CLOUD_LOCUS_CONTEXT_KEYS = exports2.EnforceError = void 0;
     exports2.evaluate = evaluate2;
     exports2.verify = verify2;
     exports2.waitForApprovalResolution = waitForApprovalResolution2;
@@ -7413,7 +7485,14 @@ var require_dist = __commonJS({
     exports2.reverifyPermit = reverifyPermit2;
     exports2.enforce = enforce;
     var transport_1 = require_transport();
+    var functionRegion_1 = require_functionRegion();
     var DEFAULT_API_URL = "https://api.atlasent.io";
+    function runtimeHeaders(config, url) {
+      return {
+        Authorization: `Bearer ${config.apiKey}`,
+        ...(0, functionRegion_1.functionRegionHeaders)(url, config.functionRegion)
+      };
+    }
     var EnforceError2 = class extends Error {
       phase;
       decision;
@@ -7479,9 +7558,7 @@ var require_dist = __commonJS({
       let status;
       let body;
       try {
-        ({ status, body } = await (0, transport_1.post)(`${apiUrl}/v1-evaluate`, JSON.stringify(payload), {
-          Authorization: `Bearer ${config.apiKey}`
-        }));
+        ({ status, body } = await (0, transport_1.post)(`${apiUrl}/v1-evaluate`, JSON.stringify(payload), runtimeHeaders(config, apiUrl)));
       } catch (err) {
         throw new EnforceError2(`AtlaSent API unreachable: ${err instanceof Error ? err.message : String(err)}`, "evaluate");
       }
@@ -7552,7 +7629,7 @@ var require_dist = __commonJS({
       let status;
       let body;
       try {
-        ({ status, body } = await (0, transport_1.post)(url, requestBody, { Authorization: `Bearer ${config.apiKey}` }));
+        ({ status, body } = await (0, transport_1.post)(url, requestBody, runtimeHeaders(config, url)));
       } catch {
         return { claimFailure: "unreachable" };
       }
@@ -7594,7 +7671,7 @@ var require_dist = __commonJS({
         let status;
         let body;
         try {
-          ({ status, body } = await (0, transport_1.get)(url, { Authorization: `Bearer ${config.apiKey}` }));
+          ({ status, body } = await (0, transport_1.get)(url, runtimeHeaders(config, url)));
         } catch {
           await sleep(APPROVAL_POLL_INTERVAL_MS);
           continue;
@@ -7665,9 +7742,7 @@ var require_dist = __commonJS({
       let status;
       let body;
       try {
-        ({ status, body } = await (0, transport_1.post)(`${apiUrl}/v1-verify-permit`, JSON.stringify(bodyObj), {
-          Authorization: `Bearer ${config.apiKey}`
-        }));
+        ({ status, body } = await (0, transport_1.post)(`${apiUrl}/v1-verify-permit`, JSON.stringify(bodyObj), runtimeHeaders(config, apiUrl)));
       } catch (err) {
         throw new EnforceError2(`verify-permit unreachable: ${err instanceof Error ? err.message : String(err)}`, "verify-permit", decision);
       }
@@ -7777,6 +7852,31 @@ var require_dist = __commonJS({
         return flat;
       return void 0;
     }
+    var functionRegion_2 = require_functionRegion();
+    Object.defineProperty(exports2, "DEFAULT_FUNCTION_REGION", { enumerable: true, get: function() {
+      return functionRegion_2.DEFAULT_FUNCTION_REGION;
+    } });
+    Object.defineProperty(exports2, "FUNCTION_REGION_ENV", { enumerable: true, get: function() {
+      return functionRegion_2.FUNCTION_REGION_ENV;
+    } });
+    Object.defineProperty(exports2, "FUNCTION_REGION_HEADER", { enumerable: true, get: function() {
+      return functionRegion_2.FUNCTION_REGION_HEADER;
+    } });
+    Object.defineProperty(exports2, "FunctionRegionConfigError", { enumerable: true, get: function() {
+      return functionRegion_2.FunctionRegionConfigError;
+    } });
+    Object.defineProperty(exports2, "HOSTED_RUNTIME_HOSTS", { enumerable: true, get: function() {
+      return functionRegion_2.HOSTED_RUNTIME_HOSTS;
+    } });
+    Object.defineProperty(exports2, "functionRegionHeaders", { enumerable: true, get: function() {
+      return functionRegion_2.functionRegionHeaders;
+    } });
+    Object.defineProperty(exports2, "parseFunctionRegion", { enumerable: true, get: function() {
+      return functionRegion_2.parseFunctionRegion;
+    } });
+    Object.defineProperty(exports2, "resolveFunctionRegion", { enumerable: true, get: function() {
+      return functionRegion_2.resolveFunctionRegion;
+    } });
   }
 });
 

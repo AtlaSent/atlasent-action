@@ -34,6 +34,13 @@ export declare const FUNCTION_REGION_ENV = "ATLASENT_FUNCTION_REGION";
 export declare const DEFAULT_FUNCTION_REGION = "us-west-1";
 /** Hosts that serve AtlaSent's hosted runtime (production and staging). */
 export declare const HOSTED_RUNTIME_HOSTS: ReadonlySet<string>;
+/**
+ * Regions Supabase accepts for `x-region`, from
+ * https://supabase.com/docs/guides/functions/regional-invocation (2026-10-02).
+ * An allowlist, not a pattern: a well-formed typo such as "us-wset-1" must be
+ * rejected here, because the platform may not reject it for us.
+ */
+export declare const SUPPORTED_FUNCTION_REGIONS: ReadonlySet<string>;
 export declare class FunctionRegionConfigError extends Error {
     constructor(value: string);
 }

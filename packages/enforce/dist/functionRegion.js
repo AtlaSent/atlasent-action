@@ -30,7 +30,7 @@
  * put every call back on the slow path.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.FunctionRegionConfigError = exports.HOSTED_RUNTIME_HOSTS = exports.DEFAULT_FUNCTION_REGION = exports.FUNCTION_REGION_ENV = exports.FUNCTION_REGION_HEADER = void 0;
+exports.FunctionRegionConfigError = exports.SUPPORTED_FUNCTION_REGIONS = exports.HOSTED_RUNTIME_HOSTS = exports.DEFAULT_FUNCTION_REGION = exports.FUNCTION_REGION_ENV = exports.FUNCTION_REGION_HEADER = void 0;
 exports.parseFunctionRegion = parseFunctionRegion;
 exports.resolveFunctionRegion = resolveFunctionRegion;
 exports.functionRegionHeaders = functionRegionHeaders;
@@ -44,10 +44,31 @@ exports.HOSTED_RUNTIME_HOSTS = new Set([
     "kttccumlnmdtupgbyfue.supabase.co",
     "lwnqpmnxpeyhpxvastku.supabase.co",
 ]);
-const REGION_ID = /^[a-z]{2}-[a-z]+-[0-9]$/;
+/**
+ * Regions Supabase accepts for `x-region`, from
+ * https://supabase.com/docs/guides/functions/regional-invocation (2026-10-02).
+ * An allowlist, not a pattern: a well-formed typo such as "us-wset-1" must be
+ * rejected here, because the platform may not reject it for us.
+ */
+exports.SUPPORTED_FUNCTION_REGIONS = new Set([
+    "ap-northeast-1",
+    "ap-northeast-2",
+    "ap-south-1",
+    "ap-southeast-1",
+    "ap-southeast-2",
+    "ca-central-1",
+    "us-east-1",
+    "us-west-1",
+    "us-west-2",
+    "eu-central-1",
+    "eu-west-1",
+    "eu-west-2",
+    "eu-west-3",
+    "sa-east-1",
+]);
 class FunctionRegionConfigError extends Error {
     constructor(value) {
-        super(`Invalid function region "${value}": expected a region id such as ` +
+        super(`Invalid function region "${value}": expected a supported region such as ` +
             `"${exports.DEFAULT_FUNCTION_REGION}", or "auto" to let Supabase choose.`);
         this.name = "FunctionRegionConfigError";
     }
@@ -58,7 +79,7 @@ function parseFunctionRegion(value) {
     const v = value.trim();
     if (v === "auto")
         return null;
-    if (REGION_ID.test(v))
+    if (exports.SUPPORTED_FUNCTION_REGIONS.has(v))
         return v;
     throw new FunctionRegionConfigError(value);
 }
