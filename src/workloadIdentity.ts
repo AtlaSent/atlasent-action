@@ -8,6 +8,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { functionRegionHeaders } from "@atlasent/enforce";
 
 export const GITHUB_ACTIONS_OIDC_AUDIENCE = "atlasent:actor_identity.v1";
 export const WORKLOAD_IDENTITY_REQUEST_TIMEOUT_MS = 30_000;
@@ -177,6 +178,7 @@ export async function mintGithubActionsActorIdentity(
     response = await resolved.fetchImpl(`${apiUrl}/v1-idp-broker/mint/actor-identity`, {
       method: "POST",
       headers: {
+        ...functionRegionHeaders(apiUrl),
         Authorization: `Bearer ${args.apiKey}`,
         "Content-Type": "application/json",
         Accept: "application/json",

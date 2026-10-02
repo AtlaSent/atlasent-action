@@ -13,6 +13,8 @@
  * Auth: uses Authorization: Bearer — same api-key input already present.
  */
 
+import { functionRegionHeaders } from "@atlasent/enforce";
+
 export type EvidenceBundleRegime = "soc2_type_ii" | "hipaa" | "gdpr";
 
 export const VALID_EVIDENCE_REGIMES = new Set<EvidenceBundleRegime>([
@@ -83,6 +85,7 @@ export async function callPostDeployEvidenceBundle(
       headers: {
         "Authorization": `Bearer ${args.apiKey}`,
         "Content-Type": "application/json",
+        ...functionRegionHeaders(url),
         ...(args.actor ? { "X-AtlaSent-Actor": args.actor } : {}),
       },
       body: JSON.stringify(body),

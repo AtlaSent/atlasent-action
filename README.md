@@ -394,6 +394,29 @@ snapshot merely to force a policy match.
 
 For the complete machine-readable input/output surface, see [`action.yml`](./action.yml).
 
+## Edge-function region
+
+The hosted AtlaSent runtime runs on Supabase Edge Functions with its
+database in `us-west-1`. Supabase runs a function in the region nearest
+the caller, so an east-coast runner would otherwise execute the gate
+across the continent from the database. Every database round trip then
+pays that latency: evaluate measured p50 1.8–2.1 s in `us-west-1` and
+5.2–7.3 s in `us-east-*`.
+
+The action pins every call to the runtime with an `x-region` header:
+
+| Setting | Behaviour |
+|---|---|
+| `function-region` input empty and `ATLASENT_FUNCTION_REGION` unset (default) | `us-west-1` for the hosted runtime; no pinning for any other host |
+| `function-region: <region>` or `ATLASENT_FUNCTION_REGION=<region>` | That region for every runtime call (the input wins over the variable) |
+| `auto` | No pinning: Supabase picks the region nearest the runner |
+
+A self-hosted runtime is not pinned by default, because it may run in a
+different region. Set `function-region` to its database region to get the
+same benefit. An invalid value fails the step before any call is made.
+The region changes only where the function executes, never the request
+body or the decision.
+
 ## Core outputs
 
 | Output | Meaning |

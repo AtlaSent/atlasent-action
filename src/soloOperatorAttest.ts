@@ -31,6 +31,7 @@
 
 import { mintGithubActionsActorIdentity, WorkloadIdentityError } from "./workloadIdentity";
 import { PRODUCTION_DEPLOY_ACTION } from "./canonicalAction";
+import { functionRegionHeaders } from "@atlasent/enforce";
 
 export const SOLO_OPERATOR_ATTEST_ACTION_TYPE = "solo_operator.attest";
 
@@ -169,6 +170,7 @@ export async function attestSoloOperator(
     response = await resolved.fetchImpl(`${apiUrl}/v1-solo-operator-attest`, {
       method: "POST",
       headers: {
+        ...functionRegionHeaders(apiUrl),
         Authorization: `Bearer ${args.apiKey}`,
         "Content-Type": "application/json",
         Accept: "application/json",

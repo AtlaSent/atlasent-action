@@ -4,6 +4,21 @@ All notable changes to `atlasent-action` are documented here.
 
 ## [Unreleased]
 
+### Added: edge-function region pinning (`function-region`)
+
+Every call to the AtlaSent runtime now carries an `x-region` header. The
+hosted runtime defaults to `us-west-1`, the region of its database.
+Supabase otherwise runs the function nearest the caller, and from an
+east-coast runner that made evaluate about 3x slower: p50 5.2–7.3 s
+against 1.8–2.1 s in-region. Configure it with the `function-region`
+input or the `ATLASENT_FUNCTION_REGION` variable; `auto` turns pinning off.
+
+Self-hosted runtimes are unchanged unless configured: they get no header
+and byte-identical requests. A malformed value fails the step before any
+request. One module owns the behaviour, `@atlasent/enforce`'s
+`functionRegion`, which is also exported, and a guard test fails if any
+other source file writes the header, or if a runtime caller skips it.
+
 ### `@atlasent/enforce` and `@atlasent/action` 2.1.0 (npm)
 
 First npm release of `@atlasent/enforce` since 2.0.0. It ships every

@@ -59,6 +59,9 @@ inputs:
   api-url:
     description: 'AtlaSent API URL base. Set to your Supabase project URL ending in /functions/v1 (e.g. https://<ref>.supabase.co/functions/v1). If not set, falls back to the ATLASENT_BASE_URL env var, then https://api.atlasent.io. NOTE: the api.atlasent.io apex 404s unless a custom domain is verified — always set this or ATLASENT_BASE_URL for self-hosted or pilot deployments.'
     required: false
+  function-region:
+    description: 'Edge-function region for calls to the AtlaSent runtime, sent as the x-region header. Empty (default): the ATLASENT_FUNCTION_REGION env var if set, otherwise us-west-1 for the hosted runtime (the region of its database) and no pinning for any other host. "auto": no pinning, Supabase picks the region nearest the runner. Otherwise a region id such as us-west-1. An invalid value fails the step.'
+    required: false
   fail-on-deny:
     description: 'Deprecated in V1 pilot mode: deny/hold/escalate always fail closed regardless of this value.'
     required: false

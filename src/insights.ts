@@ -5,6 +5,7 @@
 // best-effort: a failure here never blocks or reverses the authorization
 // decision. 403 (flag not enabled) is silently swallowed.
 
+import { functionRegionHeaders } from "@atlasent/enforce";
 export interface InsightsFired {
   campaignId: string;
   name: string;
@@ -45,6 +46,7 @@ export async function runInsightsEvaluate(
         headers: {
           Authorization: `Bearer ${cfg.apiKey}`,
           "Content-Type": "application/json",
+          ...functionRegionHeaders(cfg.apiUrl),
         },
         body: JSON.stringify({
           subjectId: cfg.subjectId,

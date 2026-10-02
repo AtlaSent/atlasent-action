@@ -17,7 +17,15 @@ export interface ApprovalSigningHint {
         required_roles?: string[];
     };
 }
-export interface EnforceConfig {
+/**
+ * Edge-function region for runtime calls. Undefined: ATLASENT_FUNCTION_REGION,
+ * then us-west-1 for the hosted runtime (see ./functionRegion). "auto" or null:
+ * unpinned. Otherwise a region id such as "us-west-1".
+ */
+type FunctionRegionOption = {
+    functionRegion?: string | null;
+};
+export interface EnforceConfig extends FunctionRegionOption {
     apiKey: string;
     apiUrl?: string;
     action: string;
@@ -219,7 +227,7 @@ export declare class EnforceError extends Error {
 }
 export declare function evaluate(config: EnforceConfig): Promise<Decision>;
 export declare function verify(decision: Decision): void;
-export interface WaitForApprovalConfig {
+export interface WaitForApprovalConfig extends FunctionRegionOption {
     apiKey: string;
     apiUrl?: string;
     /** decision.approvalRequestId from the original hold/escalate evaluate() response. */
@@ -306,3 +314,4 @@ export declare function enforce<T>(config: EnforceConfig, fn: () => Promise<T>):
     decision: Decision;
     verifyOutcome?: string;
 }>;
+export { DEFAULT_FUNCTION_REGION, FUNCTION_REGION_ENV, FUNCTION_REGION_HEADER, FunctionRegionConfigError, HOSTED_RUNTIME_HOSTS, functionRegionHeaders, parseFunctionRegion, resolveFunctionRegion, } from "./functionRegion";

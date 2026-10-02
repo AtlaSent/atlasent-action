@@ -6,6 +6,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { functionRegionHeaders } from "@atlasent/enforce";
 
 export interface PolicyBundleEntry {
   name: string;
@@ -97,6 +98,7 @@ export async function runPolicySync(opts: PolicySyncOptions): Promise<PolicySync
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
+        ...functionRegionHeaders(url),
       },
       body: JSON.stringify({
         policies,

@@ -127,3 +127,45 @@ describe("buildApprovalQuorum", () => {
     expect(typeof quorum["issued_at"]).toBe("string");
   });
 });
+
+describe("mintGithubApprovalArtifacts edge-function region", () => {
+  const saved = process.env.ATLASENT_FUNCTION_REGION;
+  const restore = () => {
+    if (saved === undefined) delete process.env.ATLASENT_FUNCTION_REGION;
+    else process.env.ATLASENT_FUNCTION_REGION = saved;
+  };
+
+  async function headersFor(apiUrl: string): Promise<Record<string, string>> {
+    let seen: Record<string, string> = {};
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seen = init?.headers as Record<string, string>;
+      return jsonResponse(200, { reviewers: [], artifacts: [] });
+    });
+    await mintGithubApprovalArtifacts({ ...BASE_ARGS, apiUrl }, { fetchImpl: fetchImpl as typeof fetch }).catch(
+      () => undefined,
+    );
+    return seen;
+  }
+
+  it("pins the hosted runtime to us-west-1", async () => {
+    delete process.env.ATLASENT_FUNCTION_REGION;
+    try {
+      const h = await headersFor("https://kttccumlnmdtupgbyfue.supabase.co/functions/v1");
+      expect(h["x-region"]).toBe("us-west-1");
+      expect(h["Authorization"]).toBe("Bearer ask_test_key");
+    } finally {
+      restore();
+    }
+  });
+
+  it("leaves a self-hosted runtime unpinned unless configured", async () => {
+    delete process.env.ATLASENT_FUNCTION_REGION;
+    try {
+      expect((await headersFor(BASE_ARGS.apiUrl))["x-region"]).toBeUndefined();
+      process.env.ATLASENT_FUNCTION_REGION = "eu-west-1";
+      expect((await headersFor(BASE_ARGS.apiUrl))["x-region"]).toBe("eu-west-1");
+    } finally {
+      restore();
+    }
+  });
+});

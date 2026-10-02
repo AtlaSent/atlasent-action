@@ -7,6 +7,7 @@
 //   4. enforce()      — composes all three; fn never runs unless all steps pass
 
 import { post, get } from "./transport";
+import { functionRegionHeaders } from "./functionRegion";
 
 const DEFAULT_API_URL = "https://api.atlasent.io";
 
@@ -34,7 +35,25 @@ export interface ApprovalSigningHint {
   };
 }
 
-export interface EnforceConfig {
+/**
+ * Edge-function region for runtime calls. Undefined: ATLASENT_FUNCTION_REGION,
+ * then us-west-1 for the hosted runtime (see ./functionRegion). "auto" or null:
+ * unpinned. Otherwise a region id such as "us-west-1".
+ */
+type FunctionRegionOption = { functionRegion?: string | null };
+
+/** Authorization plus region headers for one runtime request. */
+function runtimeHeaders(
+  config: { apiKey: string } & FunctionRegionOption,
+  url: string,
+): Record<string, string> {
+  return {
+    Authorization: `Bearer ${config.apiKey}`,
+    ...functionRegionHeaders(url, config.functionRegion),
+  };
+}
+
+export interface EnforceConfig extends FunctionRegionOption {
   apiKey: string;
   apiUrl?: string;
   action: string;
@@ -283,9 +302,7 @@ export async function evaluate(config: EnforceConfig): Promise<Decision> {
   let status: number;
   let body: string;
   try {
-    ({ status, body } = await post(`${apiUrl}/v1-evaluate`, JSON.stringify(payload), {
-      Authorization: `Bearer ${config.apiKey}`,
-    }));
+    ({ status, body } = await post(`${apiUrl}/v1-evaluate`, JSON.stringify(payload), runtimeHeaders(config, apiUrl)));
   } catch (err) {
     throw new EnforceError(
       `AtlaSent API unreachable: ${err instanceof Error ? err.message : String(err)}`,
@@ -406,7 +423,7 @@ export function verify(decision: Decision): void {
 
 const APPROVAL_POLL_INTERVAL_MS = 5_000;
 
-export interface WaitForApprovalConfig {
+export interface WaitForApprovalConfig extends FunctionRegionOption {
   apiKey: string;
   apiUrl?: string;
   /** decision.approvalRequestId from the original hold/escalate evaluate() response. */
@@ -525,7 +542,7 @@ async function claimApprovalPermit(
   let status: number;
   let body: string;
   try {
-    ({ status, body } = await post(url, requestBody, { Authorization: `Bearer ${config.apiKey}` }));
+    ({ status, body } = await post(url, requestBody, runtimeHeaders(config, url)));
   } catch {
     return { claimFailure: "unreachable" };
   }
@@ -574,7 +591,7 @@ export async function waitForApprovalResolution(
     let status: number;
     let body: string;
     try {
-      ({ status, body } = await get(url, { Authorization: `Bearer ${config.apiKey}` }));
+      ({ status, body } = await get(url, runtimeHeaders(config, url)));
     } catch {
       // Transient network failure — swallow and retry on the next tick,
       // same posture as the evaluate()/verifyPermit() infra-error path
@@ -724,9 +741,7 @@ async function postVerify(
   let status: number;
   let body: string;
   try {
-    ({ status, body } = await post(`${apiUrl}/v1-verify-permit`, JSON.stringify(bodyObj), {
-      Authorization: `Bearer ${config.apiKey}`,
-    }));
+    ({ status, body } = await post(`${apiUrl}/v1-verify-permit`, JSON.stringify(bodyObj), runtimeHeaders(config, apiUrl)));
   } catch (err) {
     throw new EnforceError(
       `verify-permit unreachable: ${err instanceof Error ? err.message : String(err)}`,
@@ -906,3 +921,14 @@ function extractRiskScore(raw: Record<string, unknown>): number | undefined {
   if (typeof flat === "number") return flat;
   return undefined;
 }
+
+export {
+  DEFAULT_FUNCTION_REGION,
+  FUNCTION_REGION_ENV,
+  FUNCTION_REGION_HEADER,
+  FunctionRegionConfigError,
+  HOSTED_RUNTIME_HOSTS,
+  functionRegionHeaders,
+  parseFunctionRegion,
+  resolveFunctionRegion,
+} from "./functionRegion";
