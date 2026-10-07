@@ -66,7 +66,7 @@ Required secrets (set in repository or org secrets):
 
 | Secret / env | Description |
 |---|---|
-| `ATLASENT_API_KEY` | API key scoped to at least `evaluate:write` + `verify:execute` |
+| `ATLASENT_API_KEY` | API key scoped to at least `evaluate:write` + `verify:execute`; for `production.deploy` and the other mandatory change-control actions also `idp_broker:mint` (the workload-identity mint returns 403 without it, before any policy decision — see README) |
 | `ATLASENT_BASE_URL` | Supabase project URL, e.g. `https://<ref>.supabase.co/functions/v1` |
 
 Key action inputs (see `action.yml` for the full machine-readable input/output surface):
