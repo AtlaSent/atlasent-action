@@ -50,6 +50,29 @@ describe("execution-boundary verification (B3/B4)", () => {
     expect(body.target_id).toBe("service:hello-safeguard");
   });
 
+  // ── commit-point principal binding (atlasent-api#3915) ────────────────────
+  it("re-presents the runtime-minted actor_identity at verify, as given", async () => {
+    const actorIdentity = { version: "actor_identity.v1", subject: { actor_id: "agent:a1" }, signature: "sig" };
+    resp(200, { valid: true, outcome: "verified" });
+    await reverifyPermit({ ...CONFIG, actorIdentity }, "pt-1");
+    expect(lastBody().actor_identity).toEqual(actorIdentity);
+
+    resp(200, { valid: true, outcome: "verified" });
+    await verifyPermit({ ...CONFIG, actorIdentity }, { decision: "allow", permitToken: "pt-2" } as Decision);
+    expect(lastBody().actor_identity).toEqual(actorIdentity);
+  });
+
+  it("sends no actor_identity at verify when the caller has none", async () => {
+    resp(200, { valid: true, outcome: "verified" });
+    await reverifyPermit(CONFIG, "pt-1");
+    expect("actor_identity" in lastBody()).toBe(false);
+  });
+
+  it("an ACTOR_IDENTITY_REQUIRED refusal from verify fails closed", async () => {
+    resp(200, { valid: false, outcome: "invalid", verify_error_code: "ACTOR_IDENTITY_REQUIRED" });
+    await expect(reverifyPermit(CONFIG, "pt-1")).rejects.toBeInstanceOf(EnforceError);
+  });
+
   // ── reads the runtime `valid` field (not the legacy `verified`) ────────────
   it("treats runtime {valid:true} as verified", async () => {
     resp(200, {

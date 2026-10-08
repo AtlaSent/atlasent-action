@@ -425,6 +425,8 @@ var require_dist = __commonJS({
         bodyObj["environment"] = config.environment;
       if (config.targetId != null)
         bodyObj["target_id"] = config.targetId;
+      if (config.actorIdentity != null)
+        bodyObj["actor_identity"] = config.actorIdentity;
       const payloadHash = decision?.executionHashExpected ?? config.executionPayloadHash;
       if (payloadHash != null)
         bodyObj["payload_hash"] = payloadHash;
@@ -3977,6 +3979,7 @@ async function runVerifyPermitStep(apiKey, apiUrl) {
   }
   const carriedActor = OPTIONAL_VERIFIED_ACTOR_ACTIONS.has(actionType) ? getInput("resolved-actor") || void 0 : void 0;
   let actorId;
+  let boundaryActorIdentity;
   if (carriedActor) {
     actorId = carriedActor;
   } else {
@@ -4000,6 +4003,7 @@ async function runVerifyPermitStep(apiKey, apiUrl) {
       return;
     }
     actorId = actorResolution.actorId;
+    boundaryActorIdentity = actorResolution.workloadIdentity?.assertion;
   }
   if (MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType) && !runtimeExecutionHash) {
     setOutput("decision", "deny");
@@ -4018,6 +4022,7 @@ async function runVerifyPermitStep(apiKey, apiUrl) {
     apiUrl,
     action: actionType,
     actor: actorId,
+    ...boundaryActorIdentity ? { actorIdentity: boundaryActorIdentity } : {},
     environment,
     targetId,
     executionPayloadHash: verificationPayloadHash,
@@ -5136,6 +5141,7 @@ async function run() {
       }
     }
   }
+  let claimActorIdentity;
   const buildMandatoryClaimBody = async (row) => {
     if (!productionChangePlan) {
       throw new Error(`no change plan was derived for "${actionType}"`);
@@ -5155,6 +5161,7 @@ async function run() {
     if (!claimer.workloadIdentity) {
       throw new Error("no verified workload identity could be minted for the claim");
     }
+    claimActorIdentity = claimer.workloadIdentity.assertion;
     if (claimer.actorId !== actorId) {
       throw new Error(
         `the re-minted actor "${claimer.actorId}" is not the actor that was evaluated ("${actorId}")`
@@ -5251,7 +5258,10 @@ async function run() {
       } else {
         let vr;
         try {
-          vr = await (0, import_enforce14.verifyPermit)(config, freshDecision);
+          vr = await (0, import_enforce14.verifyPermit)(
+            claimActorIdentity ? { ...config, actorIdentity: claimActorIdentity } : config,
+            freshDecision
+          );
         } catch (verifyErr) {
           await reportEnforceFailure(
             verifyErr instanceof import_enforce14.EnforceError ? new import_enforce14.EnforceError(

@@ -4,6 +4,25 @@ All notable changes to `atlasent-action` are documented here.
 
 ## [Unreleased]
 
+### Added: the workload identity is re-presented at verify-permit
+
+`@atlasent/enforce`'s `verifyPermit` and `reverifyPermit` now send the
+caller's runtime-minted `actor_identity.v1` to `/v1-verify-permit` when the
+config carries one, exactly as it was given. The action supplies a valid one on
+each path:
+- the single-step gate verifies seconds after evaluate with the same identity;
+- the `verify-permit` boundary step sends the identity it already mints for
+  `production.deploy` and the other change-control actions;
+- `wait-for-approval` verifies the claimed permit with the identity minted at
+  claim time, because the evaluate-time one may have expired during the wait.
+
+The runtime checks this only for an action class classified
+`verified_actor` (atlasent-api#3915). Every other class, which today is all of
+them, ignores it, so nothing changes until a class is classified. Without
+it, classifying `production.deploy` as `verified_actor` would deny every run of
+this action (atlasent-api `docs/design/EXECUTION_PRINCIPAL_BINDING.md`,
+rollout rule 3). Requests without an identity are byte-identical to before.
+
 ### Added: edge-function region pinning (`function-region`)
 
 Every call to the AtlaSent runtime now carries an `x-region` header. The

@@ -60,9 +60,10 @@ export interface EnforceConfig extends FunctionRegionOption {
   actor: string;
   /**
    * Runtime-minted actor_identity.v1 assertion for the calling workload.
-   * Sent as a canonical top-level evaluate field. The library never builds or
-   * mutates this envelope; its signature and request binding are verified by
-   * the runtime before policy evaluation.
+   * Sent as a canonical top-level evaluate field, and re-presented at
+   * verify-permit (atlasent-api#3915: required there only for action classes
+   * classified `verified_actor`). The library never builds or mutates this
+   * envelope; its signature and request binding are verified by the runtime.
    */
   actorIdentity?: Record<string, unknown>;
   environment?: string;
@@ -701,6 +702,15 @@ async function postVerify(
   };
   if (config.environment != null) bodyObj["environment"] = config.environment;
   if (config.targetId != null) bodyObj["target_id"] = config.targetId;
+  // Re-present the caller's runtime-minted actor_identity.v1 at the commit
+  // point (atlasent-api#3915). v1-verify-permit checks it only for an action
+  // class classified `verified_actor`, binding it to the PERMIT's actor,
+  // action, tenant and environment; every other class ignores it. Sending it
+  // is what lets a class be classified verified_actor without denying every
+  // run (atlasent-api docs/design/EXECUTION_PRINCIPAL_BINDING.md, rollout
+  // rule 3). The caller must pass an assertion that is still valid at verify
+  // time; this function never re-mints one.
+  if (config.actorIdentity != null) bodyObj["actor_identity"] = config.actorIdentity;
   // Prefer the runtime-bound original evaluated digest (execution_hash_expected,
   // echoed on the decision) over a caller-supplied one, so verify re-presents the
   // artifact the permit was actually issued for — not one re-supplied at verify time.
