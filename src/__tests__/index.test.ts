@@ -865,6 +865,28 @@ describe("wait-for-approval claim + consume at the execution boundary", () => {
     expect(outputs["execution-hash"]).toBe("h-claim");
   });
 
+  it("production.deploy: the claimed permit is verified with the identity minted at CLAIM time, not the evaluate-time one", async () => {
+    holdThenWait("production.deploy");
+    const claimIdentity = { version: "actor_identity.v1", subject: { principal_id: "github-actions:repo:123:workflow:deploy" }, signature: "claim-time" };
+    mockWaitForApproval.mockImplementationOnce(async (cfg: WaitConfig) => {
+      mockMintWorkloadIdentity.mockResolvedValueOnce({
+        actorId: "github-actions:repo:123:workflow:deploy",
+        assertion: claimIdentity,
+        source: {},
+      });
+      await cfg.buildClaimBody!({ status: "approved_awaiting_claim" });
+      return { status: "approved_awaiting_claim", permitToken: "pt.v4.c", executionHashExpected: "h-claim" };
+    });
+    mockVerifyPermit.mockResolvedValueOnce({ verified: true, outcome: "verified" });
+
+    await run();
+
+    const verifyConfig = mockVerifyPermit.mock.calls[0][0] as { actorIdentity?: Record<string, unknown> };
+    expect(verifyConfig.actorIdentity).toEqual(claimIdentity);
+    const evaluateConfig = mockEnforce.mock.calls[0][0] as { actorIdentity?: Record<string, unknown> };
+    expect(evaluateConfig.actorIdentity).not.toEqual(claimIdentity);
+  });
+
   it("production.deploy: a claim with no execution_hash_expected fails closed WITHOUT calling verify", async () => {
     holdThenWait("production.deploy");
     mockWaitForApproval.mockResolvedValueOnce({ status: "approved", permitToken: "pt.v4.c" });
@@ -1256,6 +1278,22 @@ describe("verify-only execution boundary", () => {
       "audit-hash": "decision-audit-hash",
       "verify-audit-hash": "verification-audit-hash",
     });
+  });
+
+  it("re-presents the workload identity it minted at the boundary (atlasent-api#3915)", async () => {
+    setApiKey();
+    setInput("verify-permit", "true");
+    setInput("permit-token", "pt-unconsumed");
+    setInput("action", "production.deploy");
+    setInput("environment", "production");
+    setInput("execution-hash", "runtime-derived-hash");
+    mockReverifyPermit.mockResolvedValueOnce({ verified: true, outcome: "verified" });
+
+    await run();
+
+    expect(mockMintWorkloadIdentity).toHaveBeenCalledTimes(1);
+    const config = mockReverifyPermit.mock.calls[0][0] as { actorIdentity?: Record<string, unknown> };
+    expect(config.actorIdentity).toEqual(expect.objectContaining({ version: "actor_identity.v1", signature: "runtime-signed" }));
   });
 
   it("re-presents the context input so an Azure-scoped permit keeps its locus at verify", async () => {

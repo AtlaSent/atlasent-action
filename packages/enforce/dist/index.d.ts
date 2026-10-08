@@ -32,9 +32,10 @@ export interface EnforceConfig extends FunctionRegionOption {
     actor: string;
     /**
      * Runtime-minted actor_identity.v1 assertion for the calling workload.
-     * Sent as a canonical top-level evaluate field. The library never builds or
-     * mutates this envelope; its signature and request binding are verified by
-     * the runtime before policy evaluation.
+     * Sent as a canonical top-level evaluate field, and re-presented at
+     * verify-permit (atlasent-api#3915: required there only for action classes
+     * classified `verified_actor`). The library never builds or mutates this
+     * envelope; its signature and request binding are verified by the runtime.
      */
     actorIdentity?: Record<string, unknown>;
     environment?: string;

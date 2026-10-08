@@ -793,6 +793,9 @@ async function runVerifyPermitStep(apiKey: string, apiUrl: string): Promise<void
     ? getInput("resolved-actor") || undefined
     : undefined;
   let actorId: string;
+  // The identity minted for THIS boundary verify, re-presented to
+  // v1-verify-permit (atlasent-api#3915). Fresh here, so it is valid at verify.
+  let boundaryActorIdentity: Record<string, unknown> | undefined;
   if (carriedActor) {
     actorId = carriedActor;
   } else {
@@ -820,6 +823,7 @@ async function runVerifyPermitStep(apiKey: string, apiUrl: string): Promise<void
       return;
     }
     actorId = actorResolution.actorId;
+    boundaryActorIdentity = actorResolution.workloadIdentity?.assertion;
   }
 
   if (MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType) && !runtimeExecutionHash) {
@@ -852,6 +856,7 @@ async function runVerifyPermitStep(apiKey: string, apiUrl: string): Promise<void
     apiUrl,
     action: actionType,
     actor: actorId,
+    ...(boundaryActorIdentity ? { actorIdentity: boundaryActorIdentity } : {}),
     environment,
     targetId,
     executionPayloadHash: verificationPayloadHash,
@@ -2419,6 +2424,7 @@ export async function run(): Promise<void> {
   // reevaluation). Built at claim time, not evaluate time: the evaluate-time
   // actor_identity.v1 is short-lived and a human decision can take up to
   // max-wait-minutes. Throwing here fails the wait closed (no claim sent).
+  let claimActorIdentity: Record<string, unknown> | undefined;
   const buildMandatoryClaimBody = async (row: {
     status: string;
     claimEnvironment?: string;
@@ -2442,6 +2448,9 @@ export async function run(): Promise<void> {
     if (!claimer.workloadIdentity) {
       throw new Error("no verified workload identity could be minted for the claim");
     }
+    // The evaluate-time assertion may have expired during the wait; the
+    // claimed permit is verified with this fresh one (atlasent-api#3915).
+    claimActorIdentity = claimer.workloadIdentity.assertion;
     if (claimer.actorId !== actorId) {
       throw new Error(
         `the re-minted actor "${claimer.actorId}" is not the actor that was evaluated ("${actorId}")`,
@@ -2630,7 +2639,10 @@ export async function run(): Promise<void> {
         // escape as an "unexpected error".
         let vr: Awaited<ReturnType<typeof verifyPermit>>;
         try {
-          vr = await verifyPermit(config, freshDecision);
+          vr = await verifyPermit(
+            claimActorIdentity ? { ...config, actorIdentity: claimActorIdentity } : config,
+            freshDecision,
+          );
         } catch (verifyErr) {
           await reportEnforceFailure(
             verifyErr instanceof EnforceError
