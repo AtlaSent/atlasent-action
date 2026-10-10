@@ -18,6 +18,9 @@ import {
   TRUST_ROOT_PUBLISH_ACTION,
   assertProtectedAction,
   normalizeProtectedAction,
+  ARTIFACT_RELEASE_ACTION,
+  VERIFIED_ACTOR_REQUIRED_ACTIONS,
+  SUPPLY_CHAIN_ASSERTION_ACTIONS,
 } from "../canonicalAction";
 
 describe("canonicalAction", () => {
@@ -126,11 +129,24 @@ describe("canonicalAction", () => {
     });
 
     it("is a conservative explicit allow-list (not open to arbitrary types)", () => {
-      expect(GATE_PERMITTED_ACTIONS.size).toBe(11);
+      expect(GATE_PERMITTED_ACTIONS.size).toBe(12);
+      expect(GATE_PERMITTED_ACTIONS.has(ARTIFACT_RELEASE_ACTION)).toBe(true);
       // A well-formed but unlisted action is NOT gate-permitted, even though
       // its format is valid — the runtime policy is the authority, but the
       // gate's client-side guard stays explicit.
       expect(GATE_PERMITTED_ACTIONS.has("database.migration.apply")).toBe(false);
+    });
+  });
+
+  describe("artifact.release", () => {
+    it("requires a verified actor and a supply_chain assertion, but is not a change-control action", () => {
+      expect(VERIFIED_ACTOR_REQUIRED_ACTIONS.has(ARTIFACT_RELEASE_ACTION)).toBe(true);
+      expect(SUPPLY_CHAIN_ASSERTION_ACTIONS.has(ARTIFACT_RELEASE_ACTION)).toBe(true);
+      expect(MANDATORY_CHANGE_CONTROL_ACTIONS.has(ARTIFACT_RELEASE_ACTION)).toBe(false);
+      expect(OPTIONAL_VERIFIED_ACTOR_ACTIONS.has(ARTIFACT_RELEASE_ACTION)).toBe(false);
+      // package.release keeps its opportunistic, non-mandatory actor and no assertion.
+      expect(VERIFIED_ACTOR_REQUIRED_ACTIONS.has(PACKAGE_RELEASE_ACTION)).toBe(false);
+      expect(SUPPLY_CHAIN_ASSERTION_ACTIONS.has(PACKAGE_RELEASE_ACTION)).toBe(false);
     });
   });
 

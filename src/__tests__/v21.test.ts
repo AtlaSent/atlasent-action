@@ -247,6 +247,23 @@ it("fails before evaluation when a production batch item has no environment", as
   expect(mockEvaluateMany).not.toHaveBeenCalled();
 });
 
+it("refuses artifact.release in batch mode before any mint or evaluation", async () => {
+  await expect(
+    runV21(
+      {
+        ...BASE_ENV,
+        INPUT_EVALUATIONS: JSON.stringify([
+          { action: "artifact.release", actor: "caller", environment: "production" },
+        ]),
+      },
+      FLAGS,
+    ),
+  ).rejects.toThrow(/not supported in batch mode/);
+
+  expect(mockMintIdentity).not.toHaveBeenCalled();
+  expect(mockEvaluateMany).not.toHaveBeenCalled();
+});
+
 it("fails before evaluation when workload identity minting is rejected", async () => {
   mockMintIdentity.mockRejectedValueOnce(new Error("enrollment mismatch"));
 

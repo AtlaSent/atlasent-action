@@ -97,6 +97,55 @@ Action obtains an independent GitHub OIDC token and runtime-minted assertion
 for each such item. Mixed batches retain their supplied actors for
 non-production actions. Any caller-supplied `actor_identity` is discarded.
 
+## Artifact release with verified provenance (`artifact.release`)
+
+`artifact.release` (Canon CANON-000002) publishes a versioned artifact to a
+registry. The runtime requires a verified workload actor **and** a
+`supply_chain` assertion. For this action the gate mints both, and it fails
+closed if either cannot be minted. There is no fallback to the caller-supplied
+actor, unlike `package.release`.
+
+```yaml
+permissions:
+  contents: read
+  id-token: write        # two OIDC tokens: actor identity and provenance
+  attestations: write    # for actions/attest-build-provenance
+steps:
+  - run: npm pack        # produces widget-1.2.3.tgz
+  - id: attest
+    uses: actions/attest-build-provenance@v2
+    with:
+      subject-path: widget-1.2.3.tgz
+  - id: digest
+    run: echo "digest=sha256:$(sha256sum widget-1.2.3.tgz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+  - uses: AtlaSent-Systems-Inc/atlasent-action@v1
+    env:
+      ATLASENT_API_KEY: ${{ secrets.ATLASENT_API_KEY }}   # needs idp_broker:mint
+      ATLASENT_BASE_URL: ${{ secrets.ATLASENT_BASE_URL }}
+    with:
+      action: artifact.release
+      target-id: npm:@acme/widget
+      artifact-digest: ${{ steps.digest.outputs.digest }}
+```
+
+The gate:
+
+1. Mints the actor identity, as it does for `production.deploy`.
+2. Requests a second OIDC token with audience `atlasent:supply_chain.v1` and
+   sends it to `/v1-supply-chain-assertion`. The runtime reads the GitHub
+   artifact attestation for that exact digest from the token's own repository,
+   Sigstore-verifies it, and signs the assertion.
+3. Sends the assertion in `assertions`, with `resource_id` set to `target-id`
+   and `context.artifact_digest` set to the digest. Evaluate counts the
+   assertion only when both fields match it. A digest in your `context` input
+   cannot replace the one the assertion vouches for.
+
+The step fails closed with `verify-error-code=ASSERTION_UNVERIFIED` when
+`artifact-digest` is not `sha256:<64 hex>`, when `target-id` is missing, or when
+the issuer refuses (for example, no attestation exists for the digest). The
+runtime side, including signer and trust-root setup, is documented in
+atlasent-api `docs/runbooks/SUPPLY_CHAIN_ASSERTION_ISSUER.md`.
+
 ## Azure DevOps Pipelines
 
 This repo also publishes a real Azure Pipelines custom task,

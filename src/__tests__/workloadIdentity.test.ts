@@ -5,6 +5,8 @@ import {
   WorkloadIdentityError,
   apiKeyCredentialReference,
   mintGithubActionsActorIdentity,
+  mintSupplyChainAssertion,
+  SUPPLY_CHAIN_OIDC_AUDIENCE,
 } from "../workloadIdentity";
 
 const ENV = {
@@ -215,5 +217,63 @@ describe("mintGithubActionsActorIdentity", () => {
         { fetchImpl: fetchImpl as typeof fetch, env: ENV },
       ),
     ).rejects.toThrow(/invalid actor_identity\.v1 response/);
+  });
+});
+
+describe("mintSupplyChainAssertion", () => {
+  const DIGEST = "sha256:" + "a".repeat(64);
+  const SC_ASSERTION = {
+    schema: "assertion.v1", class: "supply_chain",
+    subject: { type: "resource", ref: "npm:@acme/widget" },
+    claim: { artifact_digest: DIGEST },
+  };
+  const args = { apiUrl: "https://runtime.example/functions/v1/", apiKey: "ask_live_key", artifactDigest: "A".repeat(64), resourceId: "npm:@acme/widget", environment: "production" };
+
+  function scFetch(response: unknown, status = 200) {
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    const f = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("https://oidc.actions.example/token")) {
+        calls.push({ url });
+        return new Response(JSON.stringify({ value: "sc.token.sig" }));
+      }
+      calls.push({ url, body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify(response), { status });
+    });
+    return { f, calls };
+  }
+
+  it("requests a token with the supply_chain audience (never the actor-identity one) and posts the normalized digest", async () => {
+    const { f, calls } = scFetch({ kind: "supply_chain_assertion.v1", assertion: SC_ASSERTION });
+    const masked: string[] = [];
+    const a = await mintSupplyChainAssertion(args, { fetchImpl: f as typeof fetch, env: ENV, mask: (v) => masked.push(v) });
+    expect(a).toEqual(SC_ASSERTION);
+    expect(new URL(calls[0].url).searchParams.get("audience")).toBe(SUPPLY_CHAIN_OIDC_AUDIENCE);
+    expect(SUPPLY_CHAIN_OIDC_AUDIENCE).not.toBe(GITHUB_ACTIONS_OIDC_AUDIENCE);
+    expect(calls[1].url).toBe("https://runtime.example/functions/v1/v1-supply-chain-assertion");
+    expect(calls[1].body).toEqual({ id_token: "sc.token.sig", artifact_digest: DIGEST, resource_id: "npm:@acme/widget", environment: "production" });
+    expect(masked).toContain("sc.token.sig");
+  });
+
+  it.each([
+    ["another resource", { ...SC_ASSERTION, subject: { type: "resource", ref: "npm:@acme/other" } }],
+    ["another digest", { ...SC_ASSERTION, claim: { artifact_digest: "sha256:" + "b".repeat(64) } }],
+    ["another class", { ...SC_ASSERTION, class: "risk" }],
+  ])("refuses an assertion for %s", async (_n, assertion) => {
+    const { f } = scFetch({ kind: "supply_chain_assertion.v1", assertion });
+    await expect(mintSupplyChainAssertion(args, { fetchImpl: f as typeof fetch, env: ENV })).rejects.toBeInstanceOf(WorkloadIdentityError);
+  });
+
+  it("surfaces the issuer's refusal", async () => {
+    const { f } = scFetch({ error: "provenance_unverified", message: "no attestation for this digest" }, 422);
+    await expect(mintSupplyChainAssertion(args, { fetchImpl: f as typeof fetch, env: ENV })).rejects.toThrow(/HTTP 422.*no attestation for this digest/);
+  });
+
+  it("refuses before any network call without a sha256 digest, a resource, or OIDC", async () => {
+    const { f } = scFetch({});
+    await expect(mintSupplyChainAssertion({ ...args, artifactDigest: "md5:x" }, { fetchImpl: f as typeof fetch, env: ENV })).rejects.toThrow(/sha256/);
+    await expect(mintSupplyChainAssertion({ ...args, resourceId: " " }, { fetchImpl: f as typeof fetch, env: ENV })).rejects.toThrow(/target-id/);
+    await expect(mintSupplyChainAssertion(args, { fetchImpl: f as typeof fetch, env: {} })).rejects.toThrow(/id-token: write/);
+    expect(f).not.toHaveBeenCalled();
   });
 });

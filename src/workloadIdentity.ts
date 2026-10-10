@@ -11,6 +11,8 @@ import { createHash } from "node:crypto";
 import { functionRegionHeaders } from "@atlasent/enforce";
 
 export const GITHUB_ACTIONS_OIDC_AUDIENCE = "atlasent:actor_identity.v1";
+/** A different audience, so an actor-identity token can never be replayed as a provenance token. */
+export const SUPPLY_CHAIN_OIDC_AUDIENCE = "atlasent:supply_chain.v1";
 export const WORKLOAD_IDENTITY_REQUEST_TIMEOUT_MS = 30_000;
 
 export interface GithubActionsIdentitySource {
@@ -82,19 +84,20 @@ export function apiKeyCredentialReference(apiKey: string): string {
 async function requestGithubOidcToken(
   deps: Required<Pick<WorkloadIdentityDeps, "fetchImpl" | "env">> &
     Pick<WorkloadIdentityDeps, "mask">,
+  audience: string = GITHUB_ACTIONS_OIDC_AUDIENCE,
 ): Promise<string> {
   const requestUrl = (deps.env["ACTIONS_ID_TOKEN_REQUEST_URL"] ?? "").trim();
   const requestToken = (deps.env["ACTIONS_ID_TOKEN_REQUEST_TOKEN"] ?? "").trim();
   if (!requestUrl || !requestToken) {
     throw new WorkloadIdentityError(
       "GitHub OIDC is unavailable. Grant this job `permissions: id-token: write`; " +
-        "the production.deploy gate will not fall back to a caller-supplied actor.",
+        "this gate will not fall back to a caller-supplied actor or unverified provenance.",
     );
   }
 
   deps.mask?.(requestToken);
   const url = new URL(requestUrl);
-  url.searchParams.set("audience", GITHUB_ACTIONS_OIDC_AUDIENCE);
+  url.searchParams.set("audience", audience);
 
   let response: Response;
   try {
@@ -236,4 +239,87 @@ export async function mintGithubActionsActorIdentity(
     assertion: assertion as Record<string, unknown>,
     source: parsed["source"],
   };
+}
+
+const SHA256_DIGEST_RE = /^(?:sha256:)?([0-9a-f]{64})$/i;
+
+/** "sha256:<64 lower hex>" or null; the same normalization the runtime applies. */
+export function normalizeArtifactDigest(value: string | undefined): string | null {
+  const m = SHA256_DIGEST_RE.exec((value ?? "").trim());
+  return m ? `sha256:${m[1].toLowerCase()}` : null;
+}
+
+/**
+ * Exchange a SECOND GitHub OIDC token (audience atlasent:supply_chain.v1; each
+ * jti is single-use, so the actor-identity token cannot be reused) for a
+ * runtime-signed `supply_chain` assertion.v1. The runtime reads the artifact
+ * attestation from the token's own repository and Sigstore-verifies it; this
+ * function only checks that what came back is the assertion it asked for.
+ */
+export async function mintSupplyChainAssertion(
+  args: {
+    apiUrl: string;
+    apiKey: string;
+    artifactDigest: string;
+    resourceId: string;
+    environment: string;
+  },
+  deps: WorkloadIdentityDeps = {},
+): Promise<Record<string, unknown>> {
+  const digest = normalizeArtifactDigest(args.artifactDigest);
+  if (!digest) throw new WorkloadIdentityError("artifact-digest must be sha256:<64 hex> to mint a supply_chain assertion");
+  if (!args.resourceId.trim()) throw new WorkloadIdentityError("target-id is required to mint a supply_chain assertion");
+  const resolved = { fetchImpl: deps.fetchImpl ?? fetch, env: deps.env ?? process.env, mask: deps.mask };
+  const idToken = await requestGithubOidcToken(resolved, SUPPLY_CHAIN_OIDC_AUDIENCE);
+  const apiUrl = args.apiUrl.replace(/\/+$/, "");
+
+  let response: Response;
+  try {
+    response = await resolved.fetchImpl(`${apiUrl}/v1-supply-chain-assertion`, {
+      method: "POST",
+      headers: {
+        ...functionRegionHeaders(apiUrl),
+        Authorization: `Bearer ${args.apiKey}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        id_token: idToken,
+        artifact_digest: digest,
+        resource_id: args.resourceId.trim(),
+        environment: args.environment,
+      }),
+      signal: AbortSignal.timeout(WORKLOAD_IDENTITY_REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new WorkloadIdentityError(
+      `AtlaSent supply-chain assertion issuer is unreachable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const body = await response.text();
+  if (!response.ok) {
+    throw new WorkloadIdentityError(
+      `AtlaSent supply-chain assertion issuer refused this release (HTTP ${response.status}): ${responseDetail(body)}`,
+    );
+  }
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(body) as Record<string, unknown>;
+  } catch {
+    throw new WorkloadIdentityError("AtlaSent supply-chain assertion issuer returned non-JSON");
+  }
+  const a = parsed["assertion"] as Record<string, unknown> | undefined;
+  const subject = a?.["subject"] as Record<string, unknown> | undefined;
+  const claim = a?.["claim"] as Record<string, unknown> | undefined;
+  if (
+    parsed["kind"] !== "supply_chain_assertion.v1" ||
+    !a || a["schema"] !== "assertion.v1" || a["class"] !== "supply_chain" ||
+    subject?.["type"] !== "resource" || subject?.["ref"] !== args.resourceId.trim() ||
+    normalizeArtifactDigest(String(claim?.["artifact_digest"] ?? "")) !== digest
+  ) {
+    // An assertion about another resource or digest would be rejected by
+    // evaluate anyway; refuse here so the failure names the cause.
+    throw new WorkloadIdentityError("AtlaSent supply-chain assertion issuer returned an assertion for a different artifact or resource");
+  }
+  return a;
 }

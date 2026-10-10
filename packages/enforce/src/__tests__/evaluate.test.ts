@@ -103,6 +103,22 @@ describe("evaluate", () => {
     expect(body["actor_identity"]).toEqual(actorIdentity);
   });
 
+  it("forwards assertions and resource_id as top-level fields, and omits them when absent", async () => {
+    mockResponse(200, { decision: "allow" });
+    const assertion = { schema: "assertion.v1", class: "supply_chain", subject: { type: "resource", ref: "npm:@acme/widget" } };
+    await evaluate({ ...BASE_CONFIG, assertions: [assertion], resourceId: "npm:@acme/widget" });
+    const body = JSON.parse(mockPost.mock.calls[0][1] as string) as Record<string, unknown>;
+    expect(body["assertions"]).toEqual([assertion]);
+    expect(body["resource_id"]).toBe("npm:@acme/widget");
+    expect((body["context"] as Record<string, unknown>)["assertions"]).toBeUndefined();
+
+    mockResponse(200, { decision: "allow" });
+    await evaluate({ ...BASE_CONFIG, assertions: [] });
+    const bare = JSON.parse(mockPost.mock.calls[1][1] as string) as Record<string, unknown>;
+    expect("assertions" in bare).toBe(false);
+    expect("resource_id" in bare).toBe(false);
+  });
+
   it("forwards change_plan as a top-level field", async () => {
     mockResponse(200, { decision: "allow" });
     const changePlan = {

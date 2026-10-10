@@ -33,6 +33,7 @@ vi.mock("../workloadIdentity", async (importOriginal) => {
   return {
     ...original,
     mintGithubActionsActorIdentity: vi.fn(),
+    mintSupplyChainAssertion: vi.fn(),
   };
 });
 
@@ -46,7 +47,7 @@ import {
 } from "@atlasent/enforce";
 import type { Decision } from "@atlasent/enforce";
 import { resolveApprovals } from "../approvals";
-import { mintGithubActionsActorIdentity } from "../workloadIdentity";
+import { mintGithubActionsActorIdentity, mintSupplyChainAssertion } from "../workloadIdentity";
 import { runInsightsEvaluate } from "../insights";
 
 // Import run() after mocking to ensure the mock is in place.
@@ -61,6 +62,7 @@ const mockResolveApprovals = resolveApprovals as unknown as ReturnType<typeof vi
 const mockMintWorkloadIdentity = mintGithubActionsActorIdentity as unknown as ReturnType<
   typeof vi.fn
 >;
+const mockMintSupplyChain = mintSupplyChainAssertion as unknown as ReturnType<typeof vi.fn>;
 const mockRunInsightsEvaluate = runInsightsEvaluate as unknown as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
@@ -523,6 +525,103 @@ describe("allow response", () => {
         line.includes("GitHub OIDC is unavailable")
       ),
     ).toBe(true);
+  });
+
+  describe("artifact.release (supply_chain assertion)", () => {
+    const DIGEST = "sha256:" + "a".repeat(64);
+    const ASSERTION = {
+      schema: "assertion.v1", class: "supply_chain",
+      subject: { type: "resource", ref: "npm:@acme/widget" }, claim: { artifact_digest: DIGEST },
+    };
+
+    it("mints the actor AND the supply_chain assertion, and sends resource_id + context.artifact_digest", async () => {
+      setApiKey();
+      setInput("action", "artifact.release");
+      setInput("target-id", "npm:@acme/widget");
+      setInput("artifact-digest", "A".repeat(64));
+      setInput("environment", "production");
+      setInput("context", JSON.stringify({ artifact_digest: "sha256:" + "f".repeat(64) }));
+      mockMintSupplyChain.mockResolvedValueOnce(ASSERTION);
+      mockEnforce.mockResolvedValueOnce(makeAllowResult());
+
+      await run();
+
+      expect(mockMintWorkloadIdentity).toHaveBeenCalledWith(
+        expect.objectContaining({ actionType: "artifact.release" }),
+        expect.objectContaining({ mask: expect.any(Function) }),
+      );
+      expect(mockMintSupplyChain).toHaveBeenCalledWith(
+        expect.objectContaining({ artifactDigest: DIGEST, resourceId: "npm:@acme/widget", environment: "production" }),
+        expect.objectContaining({ mask: expect.any(Function) }),
+      );
+      const config = mockEnforce.mock.calls[0][0] as {
+        actor: string; assertions?: unknown[]; resourceId?: string; changePlan?: unknown; context: Record<string, unknown>;
+      };
+      expect(config.actor).toBe("github-actions:repo:123:workflow:deploy");
+      expect(config.assertions).toEqual([ASSERTION]);
+      expect(config.resourceId).toBe("npm:@acme/widget");
+      // The operator's context cannot replace the digest the assertion vouches for.
+      expect(config.context["artifact_digest"]).toBe(DIGEST);
+      expect(config.changePlan).toBeUndefined();
+    });
+
+    it("fails closed when the actor cannot be verified (no fallback, unlike package.release)", async () => {
+      setApiKey();
+      setInput("action", "artifact.release");
+      setInput("target-id", "npm:@acme/widget");
+      setInput("artifact-digest", DIGEST);
+      mockMintWorkloadIdentity.mockRejectedValueOnce(new Error("GitHub OIDC is unavailable"));
+
+      await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+      expect(mockEnforce).not.toHaveBeenCalled();
+      expect(mockMintSupplyChain).not.toHaveBeenCalled();
+      expect(readOutputs(outputFile)).toMatchObject({ decision: "deny", "verify-error-code": "ACTOR_UNVERIFIED" });
+    });
+
+    it.each([
+      ["no artifact-digest", { "target-id": "npm:@acme/widget" }],
+      ["a non-sha256 digest", { "target-id": "npm:@acme/widget", "artifact-digest": "md5:abc" }],
+      ["no target-id", { "artifact-digest": "sha256:" + "a".repeat(64) }],
+      ["wait-for-approval (assertions would be stale at claim)", {
+        "target-id": "npm:@acme/widget", "artifact-digest": "sha256:" + "a".repeat(64), "wait-for-approval": "true",
+      }],
+    ])("fails closed before any mint or evaluate with %s", async (_name, inputs) => {
+      setApiKey();
+      setInput("action", "artifact.release");
+      for (const [k, v] of Object.entries(inputs)) setInput(k, v);
+
+      await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+      expect(mockMintSupplyChain).not.toHaveBeenCalled();
+      expect(mockEnforce).not.toHaveBeenCalled();
+      expect(readOutputs(outputFile)).toMatchObject({ decision: "deny", "verify-error-code": "ASSERTION_UNVERIFIED" });
+    });
+
+    it("fails closed when the issuer refuses, and names why", async () => {
+      setApiKey();
+      setInput("action", "artifact.release");
+      setInput("target-id", "npm:@acme/widget");
+      setInput("artifact-digest", DIGEST);
+      mockMintSupplyChain.mockRejectedValueOnce(new Error("no attestation for this digest"));
+
+      await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+      expect(mockEnforce).not.toHaveBeenCalled();
+      expect(readOutputs(outputFile)).toMatchObject({ decision: "deny", "verify-error-code": "ASSERTION_UNVERIFIED" });
+      expect(getConsoleLogs().some((l) => l.includes("no attestation for this digest"))).toBe(true);
+    });
+
+    it("never mints or sends assertions for other action types", async () => {
+      setApiKey();
+      setInput("action", "package.release");
+      setInput("target-id", "npm:@acme/widget");
+      setInput("artifact-digest", DIGEST);
+      mockEnforce.mockResolvedValueOnce(makeAllowResult());
+
+      await run();
+      expect(mockMintSupplyChain).not.toHaveBeenCalled();
+      const config = mockEnforce.mock.calls[0][0] as { assertions?: unknown; resourceId?: unknown };
+      expect(config.assertions).toBeUndefined();
+      expect(config.resourceId).toBeUndefined();
+    });
   });
 
   it("sets permit-token, evaluation-id, proof-hash, risk-score outputs on allow", async () => {

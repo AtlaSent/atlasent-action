@@ -66,6 +66,17 @@ export interface EnforceConfig extends FunctionRegionOption {
    * envelope; its signature and request binding are verified by the runtime.
    */
   actorIdentity?: Record<string, unknown>;
+  /**
+   * Runtime-minted assertion.v1 envelopes (e.g. a `supply_chain` assertion for
+   * artifact.release). Sent unchanged as the top-level evaluate `assertions`
+   * array; the runtime verifies each one.
+   */
+  assertions?: Record<string, unknown>[];
+  /**
+   * Top-level `resource_id`. Evaluate binds a resource-subject assertion only
+   * to this field, so it is required when `assertions` name a resource.
+   */
+  resourceId?: string;
   environment?: string;
   targetId?: string;
   resource?: {
@@ -280,6 +291,8 @@ export async function evaluate(config: EnforceConfig): Promise<Decision> {
     },
   };
   if (config.actorIdentity != null) payload["actor_identity"] = config.actorIdentity;
+  if (config.assertions != null && config.assertions.length > 0) payload["assertions"] = config.assertions;
+  if (config.resourceId) payload["resource_id"] = config.resourceId;
   // Top-level fields forwarded to the control plane's EvaluateRequest.
   if (config.environment != null) payload["environment"] = config.environment;
   if (config.resource != null) payload["resource"] = config.resource;

@@ -22,7 +22,12 @@ import { parseInputs } from "./inputs";
 import { waitForTerminalDecision } from "./stream";
 import type { Decision, EvaluateRequest } from "./types";
 import { emitEvidenceEvent } from "./evidenceClient";
-import { OPTIONAL_VERIFIED_ACTOR_ACTIONS, PRODUCTION_DEPLOY_ACTION } from "./canonicalAction";
+import {
+  OPTIONAL_VERIFIED_ACTOR_ACTIONS,
+  PRODUCTION_DEPLOY_ACTION,
+  SUPPLY_CHAIN_ASSERTION_ACTIONS,
+  VERIFIED_ACTOR_REQUIRED_ACTIONS,
+} from "./canonicalAction";
 import {
   WorkloadIdentityError,
   mintGithubActionsActorIdentity,
@@ -71,6 +76,16 @@ async function bindBatchWorkloadIdentities(
   const bound: EvaluateRequest[] = [];
 
   for (const item of items) {
+    // artifact.release needs a minted actor AND a per-artifact supply_chain
+    // assertion bound to its resource and digest. The batch path mints
+    // neither, so refuse it here rather than send an item that can never
+    // authorize (Codex on atlasent-action#199).
+    if (SUPPLY_CHAIN_ASSERTION_ACTIONS.has(item.action) || VERIFIED_ACTOR_REQUIRED_ACTIONS.has(item.action)) {
+      throw new WorkloadIdentityError(
+        `"${item.action}" is not supported in batch mode: it needs a verified actor and a supply_chain ` +
+          "assertion minted per artifact. Evaluate it with the single `action:` input instead.",
+      );
+    }
     const sanitized = { ...item };
     delete sanitized.actor_identity;
 
