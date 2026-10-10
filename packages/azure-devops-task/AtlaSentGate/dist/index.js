@@ -7530,6 +7530,10 @@ var require_dist = __commonJS({
       };
       if (config.actorIdentity != null)
         payload["actor_identity"] = config.actorIdentity;
+      if (config.assertions != null && config.assertions.length > 0)
+        payload["assertions"] = config.assertions;
+      if (config.resourceId)
+        payload["resource_id"] = config.resourceId;
       if (config.environment != null)
         payload["environment"] = config.environment;
       if (config.resource != null)
