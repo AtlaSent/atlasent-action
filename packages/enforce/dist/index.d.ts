@@ -38,6 +38,17 @@ export interface EnforceConfig extends FunctionRegionOption {
      * envelope; its signature and request binding are verified by the runtime.
      */
     actorIdentity?: Record<string, unknown>;
+    /**
+     * Runtime-minted assertion.v1 envelopes (e.g. a `supply_chain` assertion for
+     * artifact.release). Sent unchanged as the top-level evaluate `assertions`
+     * array; the runtime verifies each one.
+     */
+    assertions?: Record<string, unknown>[];
+    /**
+     * Top-level `resource_id`. Evaluate binds a resource-subject assertion only
+     * to this field, so it is required when `assertions` name a resource.
+     */
+    resourceId?: string;
     environment?: string;
     targetId?: string;
     resource?: {
