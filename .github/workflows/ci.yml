@@ -25,6 +25,20 @@ jobs:
 
       - run: npm run typecheck
 
+      # dist/index.js bundles packages/enforce/dist (its package.json "main"),
+      # not its src. Rebuild that first and require it committed, or a change
+      # to packages/enforce/src ships nowhere while every check stays green
+      # (the supply_chain assertion was dropped from evaluate this way).
+      - run: npm run build -w @atlasent/enforce
+
+      - name: Verify packages/enforce/dist is up to date
+        run: |
+          if ! git diff --quiet -- packages/enforce/dist; then
+            echo "::error::packages/enforce/dist is out of date. Run 'npm run build -w @atlasent/enforce' and commit it."
+            git --no-pager diff --stat -- packages/enforce/dist
+            exit 1
+          fi
+
       - run: npm run build
 
       - name: Verify dist is up to date
