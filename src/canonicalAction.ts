@@ -80,6 +80,15 @@ export const COMMUNICATION_EXTERNAL_SEND_ACTION = "communication.external.send";
 export const LEGACY_PRODUCTION_DEPLOY_ALIAS = "deployment.production";
 
 /**
+ * `artifact.release` (CANON-000002): publishing a versioned artifact to a
+ * registry. Its Canon floor requires a verified actor AND a `supply_chain`
+ * assertion, so unlike `package.release` a missing workload identity is a
+ * refusal, not a fallback. It is not a change-control action: no change_plan
+ * is built for it.
+ */
+export const ARTIFACT_RELEASE_ACTION = "artifact.release";
+
+/**
  * Action types the gate accepts on its single-eval path. This is a
  * conservative client-side allow-list, NOT the authority — the runtime
  * policy is. Deny-by-default still applies: an accepted action type with
@@ -93,6 +102,7 @@ export const GATE_PERMITTED_ACTIONS: ReadonlySet<string> = new Set([
   PRODUCTION_ROLLBACK_ACTION,
   SECRET_CONFIGURATION_CHANGE_ACTION,
   PACKAGE_RELEASE_ACTION,
+  ARTIFACT_RELEASE_ACTION,
   TRIAL_BLINDING_SETUP_ACTION,
   TRIAL_UNBLINDING_EXECUTE_ACTION,
   TRIAL_UNBLINDING_EMERGENCY_ACTION,
@@ -146,6 +156,21 @@ export const MANDATORY_CHANGE_CONTROL_ACTIONS: ReadonlySet<string> = new Set([
  */
 export const OPTIONAL_VERIFIED_ACTOR_ACTIONS: ReadonlySet<string> = new Set([
   PACKAGE_RELEASE_ACTION,
+]);
+
+/** Action types outside MANDATORY_CHANGE_CONTROL_ACTIONS whose verified actor is still mandatory. */
+export const VERIFIED_ACTOR_REQUIRED_ACTIONS: ReadonlySet<string> = new Set([
+  ARTIFACT_RELEASE_ACTION,
+]);
+
+/**
+ * Action types for which this action mints a `supply_chain` assertion
+ * (atlasent-api v1-supply-chain-assertion) from the job's GitHub artifact
+ * attestation and sends it, with resource_id and context.artifact_digest,
+ * on evaluate. A mint failure fails the step closed.
+ */
+export const SUPPLY_CHAIN_ASSERTION_ACTIONS: ReadonlySet<string> = new Set([
+  ARTIFACT_RELEASE_ACTION,
 ]);
 
 // ---------------------------------------------------------------------------

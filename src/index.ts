@@ -59,6 +59,8 @@ import {
   MANDATORY_CHANGE_CONTROL_ACTIONS,
   OPTIONAL_VERIFIED_ACTOR_ACTIONS,
   PRODUCTION_DEPLOY_ACTION,
+  SUPPLY_CHAIN_ASSERTION_ACTIONS,
+  VERIFIED_ACTOR_REQUIRED_ACTIONS,
   assertValidActionType,
   normalizeProtectedAction,
 } from "./canonicalAction";
@@ -75,6 +77,8 @@ import {
 import {
   WorkloadIdentityError,
   mintGithubActionsActorIdentity,
+  mintSupplyChainAssertion,
+  normalizeArtifactDigest,
   type MintedGithubActionsIdentity,
 } from "./workloadIdentity";
 import { SoloOperatorAttestError, attestSoloOperator } from "./soloOperatorAttest";
@@ -558,7 +562,9 @@ async function resolveProtectedActor(args: {
   triggeringActor: string;
 }): Promise<ProtectedActorResolution> {
   const triggeringActorId = `github:${args.triggeringActor}`;
-  const isMandatory = MANDATORY_CHANGE_CONTROL_ACTIONS.has(args.actionType);
+  const isMandatory =
+    MANDATORY_CHANGE_CONTROL_ACTIONS.has(args.actionType) ||
+    VERIFIED_ACTOR_REQUIRED_ACTIONS.has(args.actionType);
   const isOptional = OPTIONAL_VERIFIED_ACTOR_ACTIONS.has(args.actionType);
   if (!isMandatory && !isOptional) {
     return { actorId: triggeringActorId, triggeringActorId };
@@ -2087,6 +2093,44 @@ export async function run(): Promise<void> {
     return;
   }
 
+  // artifact.release: mint the `supply_chain` assertion its Canon floor
+  // requires (atlasent-api v1-supply-chain-assertion) and send it with the
+  // two fields evaluate binds it to: top-level resource_id (= target-id) and
+  // context.artifact_digest (= artifact-digest). Any failure fails closed:
+  // without it the runtime denies ASSERTION_UNVERIFIED anyway, and this names
+  // the cause.
+  let supplyChainAssertion: Record<string, unknown> | undefined;
+  const supplyChainDigest = SUPPLY_CHAIN_ASSERTION_ACTIONS.has(actionType)
+    ? normalizeArtifactDigest(artifactDigest)
+    : null;
+  if (SUPPLY_CHAIN_ASSERTION_ACTIONS.has(actionType)) {
+    const failClosed = (why: string) => {
+      setOutput("decision", "deny");
+      setOutput("verified", "false");
+      setOutput("permit-issued", "false");
+      setOutput("verify-outcome", "assertion_unverified");
+      setOutput("verify-error-code", "ASSERTION_UNVERIFIED");
+      setFailed(`AtlaSent Gate: ${why} Release blocked (fail-closed).`);
+    };
+    if (!supplyChainDigest) {
+      failClosed(`"${actionType}" needs \`artifact-digest\` as sha256:<64 hex> so a supply_chain assertion can be minted for it.`);
+      return;
+    }
+    if (!targetId) {
+      failClosed(`"${actionType}" needs \`target-id\` (what is being released, e.g. npm:@scope/pkg); the supply_chain assertion is bound to it.`);
+      return;
+    }
+    try {
+      supplyChainAssertion = await mintSupplyChainAssertion(
+        { apiUrl, apiKey, artifactDigest: supplyChainDigest, resourceId: targetId, environment },
+        { mask: maskValue },
+      );
+    } catch (error) {
+      failClosed(error instanceof Error ? error.message : String(error));
+      return;
+    }
+  }
+
   // Mandatory production-change controls reject caller-supplied raw hashes.
   // The runtime derives the execution hash from this verified revision plus
   // the optional artifact identity and echoes that opaque binding for verify.
@@ -2160,6 +2204,7 @@ export async function run(): Promise<void> {
     action: actionType,
     actor: actorId,
     actorIdentity: actorResolution.workloadIdentity?.assertion,
+    ...(supplyChainAssertion ? { assertions: [supplyChainAssertion], resourceId: targetId } : {}),
     environment,
     targetId,
     changePlan: productionChangePlan,
@@ -2199,6 +2244,9 @@ export async function run(): Promise<void> {
       // PR-review-derived approval count (and repository/ref/sha/workflow)
       // for every caller of this action.
       ...extraContext,
+      // The digest the supply_chain assertion vouches for; applied after the
+      // operator's context so it cannot be shadowed by a different value.
+      ...(supplyChainDigest ? { artifact_digest: supplyChainDigest } : {}),
       repository: gh.repository,
       ref: gh.ref,
       sha: gh.sha,

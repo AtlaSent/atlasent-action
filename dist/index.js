@@ -620,12 +620,14 @@ var TRUST_ROOT_PUBLISH_ACTION = "trust_root.publish";
 var RECONCILIATION_CERTIFY_ACTION = "reconciliation.certify";
 var COMMUNICATION_EXTERNAL_SEND_ACTION = "communication.external.send";
 var LEGACY_PRODUCTION_DEPLOY_ALIAS = "deployment.production";
+var ARTIFACT_RELEASE_ACTION = "artifact.release";
 var GATE_PERMITTED_ACTIONS = /* @__PURE__ */ new Set([
   PRODUCTION_DEPLOY_ACTION,
   INFRASTRUCTURE_CHANGE_ACTION,
   PRODUCTION_ROLLBACK_ACTION,
   SECRET_CONFIGURATION_CHANGE_ACTION,
   PACKAGE_RELEASE_ACTION,
+  ARTIFACT_RELEASE_ACTION,
   TRIAL_BLINDING_SETUP_ACTION,
   TRIAL_UNBLINDING_EXECUTE_ACTION,
   TRIAL_UNBLINDING_EMERGENCY_ACTION,
@@ -641,6 +643,12 @@ var MANDATORY_CHANGE_CONTROL_ACTIONS = /* @__PURE__ */ new Set([
 ]);
 var OPTIONAL_VERIFIED_ACTOR_ACTIONS = /* @__PURE__ */ new Set([
   PACKAGE_RELEASE_ACTION
+]);
+var VERIFIED_ACTOR_REQUIRED_ACTIONS = /* @__PURE__ */ new Set([
+  ARTIFACT_RELEASE_ACTION
+]);
+var SUPPLY_CHAIN_ASSERTION_ACTIONS = /* @__PURE__ */ new Set([
+  ARTIFACT_RELEASE_ACTION
 ]);
 function normalizeProtectedAction(raw) {
   if (raw === LEGACY_PRODUCTION_DEPLOY_ALIAS) {
@@ -912,6 +920,7 @@ async function emitEvidenceEvent(cfg, event, log = console) {
 var import_node_crypto = require("node:crypto");
 var import_enforce4 = __toESM(require_dist());
 var GITHUB_ACTIONS_OIDC_AUDIENCE = "atlasent:actor_identity.v1";
+var SUPPLY_CHAIN_OIDC_AUDIENCE = "atlasent:supply_chain.v1";
 var WORKLOAD_IDENTITY_REQUEST_TIMEOUT_MS = 3e4;
 var WorkloadIdentityError = class extends Error {
   constructor(message) {
@@ -942,17 +951,17 @@ function isMissingBrokerMintScope(status, body) {
 function apiKeyCredentialReference(apiKey) {
   return `sha256:${(0, import_node_crypto.createHash)("sha256").update(apiKey).digest("hex").slice(0, 16)}`;
 }
-async function requestGithubOidcToken(deps) {
+async function requestGithubOidcToken(deps, audience = GITHUB_ACTIONS_OIDC_AUDIENCE) {
   const requestUrl = (deps.env["ACTIONS_ID_TOKEN_REQUEST_URL"] ?? "").trim();
   const requestToken = (deps.env["ACTIONS_ID_TOKEN_REQUEST_TOKEN"] ?? "").trim();
   if (!requestUrl || !requestToken) {
     throw new WorkloadIdentityError(
-      "GitHub OIDC is unavailable. Grant this job `permissions: id-token: write`; the production.deploy gate will not fall back to a caller-supplied actor."
+      "GitHub OIDC is unavailable. Grant this job `permissions: id-token: write`; this gate will not fall back to a caller-supplied actor or unverified provenance."
     );
   }
   deps.mask?.(requestToken);
   const url = new URL(requestUrl);
-  url.searchParams.set("audience", GITHUB_ACTIONS_OIDC_AUDIENCE);
+  url.searchParams.set("audience", audience);
   let response;
   try {
     response = await deps.fetchImpl(url, {
@@ -1048,6 +1057,63 @@ async function mintGithubActionsActorIdentity(args, deps = {}) {
     assertion,
     source: parsed["source"]
   };
+}
+var SHA256_DIGEST_RE = /^(?:sha256:)?([0-9a-f]{64})$/i;
+function normalizeArtifactDigest(value) {
+  const m = SHA256_DIGEST_RE.exec((value ?? "").trim());
+  return m ? `sha256:${m[1].toLowerCase()}` : null;
+}
+async function mintSupplyChainAssertion(args, deps = {}) {
+  const digest = normalizeArtifactDigest(args.artifactDigest);
+  if (!digest)
+    throw new WorkloadIdentityError("artifact-digest must be sha256:<64 hex> to mint a supply_chain assertion");
+  if (!args.resourceId.trim())
+    throw new WorkloadIdentityError("target-id is required to mint a supply_chain assertion");
+  const resolved = { fetchImpl: deps.fetchImpl ?? fetch, env: deps.env ?? process.env, mask: deps.mask };
+  const idToken = await requestGithubOidcToken(resolved, SUPPLY_CHAIN_OIDC_AUDIENCE);
+  const apiUrl = args.apiUrl.replace(/\/+$/, "");
+  let response;
+  try {
+    response = await resolved.fetchImpl(`${apiUrl}/v1-supply-chain-assertion`, {
+      method: "POST",
+      headers: {
+        ...(0, import_enforce4.functionRegionHeaders)(apiUrl),
+        Authorization: `Bearer ${args.apiKey}`,
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body: JSON.stringify({
+        id_token: idToken,
+        artifact_digest: digest,
+        resource_id: args.resourceId.trim(),
+        environment: args.environment
+      }),
+      signal: AbortSignal.timeout(WORKLOAD_IDENTITY_REQUEST_TIMEOUT_MS)
+    });
+  } catch (error) {
+    throw new WorkloadIdentityError(
+      `AtlaSent supply-chain assertion issuer is unreachable: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  const body = await response.text();
+  if (!response.ok) {
+    throw new WorkloadIdentityError(
+      `AtlaSent supply-chain assertion issuer refused this release (HTTP ${response.status}): ${responseDetail(body)}`
+    );
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new WorkloadIdentityError("AtlaSent supply-chain assertion issuer returned non-JSON");
+  }
+  const a = parsed["assertion"];
+  const subject = a?.["subject"];
+  const claim = a?.["claim"];
+  if (parsed["kind"] !== "supply_chain_assertion.v1" || !a || a["schema"] !== "assertion.v1" || a["class"] !== "supply_chain" || subject?.["type"] !== "resource" || subject?.["ref"] !== args.resourceId.trim() || normalizeArtifactDigest(String(claim?.["artifact_digest"] ?? "")) !== digest) {
+    throw new WorkloadIdentityError("AtlaSent supply-chain assertion issuer returned an assertion for a different artifact or resource");
+  }
+  return a;
 }
 
 // src/v21.ts
@@ -3830,7 +3896,7 @@ function resolveEnvironment(explicit, ref, apiKey) {
 }
 async function resolveProtectedActor(args) {
   const triggeringActorId = `github:${args.triggeringActor}`;
-  const isMandatory = MANDATORY_CHANGE_CONTROL_ACTIONS.has(args.actionType);
+  const isMandatory = MANDATORY_CHANGE_CONTROL_ACTIONS.has(args.actionType) || VERIFIED_ACTOR_REQUIRED_ACTIONS.has(args.actionType);
   const isOptional = OPTIONAL_VERIFIED_ACTOR_ACTIONS.has(args.actionType);
   if (!isMandatory && !isOptional) {
     return { actorId: triggeringActorId, triggeringActorId };
@@ -4902,6 +4968,35 @@ async function run() {
     );
     return;
   }
+  let supplyChainAssertion;
+  const supplyChainDigest = SUPPLY_CHAIN_ASSERTION_ACTIONS.has(actionType) ? normalizeArtifactDigest(artifactDigest) : null;
+  if (SUPPLY_CHAIN_ASSERTION_ACTIONS.has(actionType)) {
+    const failClosed = (why) => {
+      setOutput("decision", "deny");
+      setOutput("verified", "false");
+      setOutput("permit-issued", "false");
+      setOutput("verify-outcome", "assertion_unverified");
+      setOutput("verify-error-code", "ASSERTION_UNVERIFIED");
+      setFailed(`AtlaSent Gate: ${why} Release blocked (fail-closed).`);
+    };
+    if (!supplyChainDigest) {
+      failClosed(`"${actionType}" needs \`artifact-digest\` as sha256:<64 hex> so a supply_chain assertion can be minted for it.`);
+      return;
+    }
+    if (!targetId) {
+      failClosed(`"${actionType}" needs \`target-id\` (what is being released, e.g. npm:@scope/pkg); the supply_chain assertion is bound to it.`);
+      return;
+    }
+    try {
+      supplyChainAssertion = await mintSupplyChainAssertion(
+        { apiUrl, apiKey, artifactDigest: supplyChainDigest, resourceId: targetId, environment },
+        { mask: maskValue }
+      );
+    } catch (error) {
+      failClosed(error instanceof Error ? error.message : String(error));
+      return;
+    }
+  }
   const directExecutionPayloadHash = MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType) ? void 0 : normalizeExecutionPayloadHash(artifactDigest);
   let evidenceProfile;
   const evidenceProfileRaw = getInput("evidence-profile") || void 0;
@@ -4927,6 +5022,7 @@ async function run() {
     action: actionType,
     actor: actorId,
     actorIdentity: actorResolution.workloadIdentity?.assertion,
+    ...supplyChainAssertion ? { assertions: [supplyChainAssertion], resourceId: targetId } : {},
     environment,
     targetId,
     changePlan: productionChangePlan,
@@ -4966,6 +5062,9 @@ async function run() {
       // PR-review-derived approval count (and repository/ref/sha/workflow)
       // for every caller of this action.
       ...extraContext,
+      // The digest the supply_chain assertion vouches for; applied after the
+      // operator's context so it cannot be shadowed by a different value.
+      ...supplyChainDigest ? { artifact_digest: supplyChainDigest } : {},
       repository: gh.repository,
       ref: gh.ref,
       sha: gh.sha,
