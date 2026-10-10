@@ -9,6 +9,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolveFunctionRegion = exports.parseFunctionRegion = exports.functionRegionHeaders = exports.HOSTED_RUNTIME_HOSTS = exports.FunctionRegionConfigError = exports.FUNCTION_REGION_HEADER = exports.FUNCTION_REGION_ENV = exports.DEFAULT_FUNCTION_REGION = exports.CLOUD_LOCUS_CONTEXT_KEYS = exports.EnforceError = void 0;
 exports.evaluate = evaluate;
+exports.denyReasonText = denyReasonText;
 exports.verify = verify;
 exports.waitForApprovalResolution = waitForApprovalResolution;
 exports.requiredBindingsFor = requiredBindingsFor;
@@ -153,12 +154,27 @@ async function evaluate(config) {
 // ---------------------------------------------------------------------------
 // Step 2 — verify (decision check — no HTTP call)
 // ---------------------------------------------------------------------------
+/**
+ * The text to show for a deny. v1-evaluate withholds `deny_reason` for
+ * deny codes outside its `safe` disclosure tier (ADR-024: the free text could
+ * reveal which rule or role a caller failed), but it always sends `deny_code`.
+ * Reading only `denyReason` therefore reported "no reason provided" for, e.g.,
+ * ACTOR_NOT_ALLOWED, when the runtime had named the failed rule.
+ */
+function denyReasonText(decision) {
+    if (decision?.denyReason)
+        return decision.denyReason;
+    if (decision?.denyCode) {
+        return `${decision.denyCode} (the runtime withholds the reason text for this deny code)`;
+    }
+    return "no reason provided";
+}
 function verify(decision) {
     switch (decision.decision) {
         case "allow":
             return;
         case "deny":
-            throw new EnforceError(`Denied: ${decision.denyReason ?? "no reason provided"}`, "verify", decision);
+            throw new EnforceError(`Denied: ${denyReasonText(decision)}`, "verify", decision);
         case "hold":
             throw new EnforceError(`On hold: ${decision.holdReason ?? "awaiting approval"}`, "verify", decision);
         case "escalate":

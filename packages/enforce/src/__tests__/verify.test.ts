@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { verify, EnforceError } from "../index";
+import { verify, denyReasonText, EnforceError } from "../index";
 import type { Decision } from "../index";
 
 const allowed: Decision = { decision: "allow" };
@@ -22,6 +22,15 @@ describe("verify", () => {
   it("throws EnforceError(verify) on deny with fallback reason", () => {
     const err = getEnforceError(() => verify({ decision: "deny" }));
     expect(err.message).toContain("no reason provided");
+  });
+
+  it("names the deny code when the runtime withholds the reason text", () => {
+    // v1-evaluate sends deny_code but omits deny_reason outside its `safe`
+    // disclosure tier (ADR-024). Run 38028053605 printed "no reason provided"
+    // for ACTOR_NOT_ALLOWED this way.
+    const err = getEnforceError(() => verify({ decision: "deny", denyCode: "ACTOR_NOT_ALLOWED" }));
+    expect(err.message).toContain("ACTOR_NOT_ALLOWED");
+    expect(err.message).not.toContain("no reason provided");
   });
 
   it("throws EnforceError(verify) on hold with reason", () => {
@@ -58,3 +67,22 @@ function getEnforceError(fn: () => void): EnforceError {
     throw err;
   }
 }
+
+describe("denyReasonText", () => {
+  it("prefers the reason text when the runtime sent it", () => {
+    expect(denyReasonText({ denyReason: "Actor not on allow list", denyCode: "ACTOR_NOT_ALLOWED" })).toBe(
+      "Actor not on allow list",
+    );
+  });
+
+  it("falls back to the deny code and says the reason was withheld", () => {
+    const text = denyReasonText({ denyCode: "ACTOR_NOT_ALLOWED" });
+    expect(text).toContain("ACTOR_NOT_ALLOWED");
+    expect(text).toContain("withholds");
+  });
+
+  it("says no reason was provided only when neither is present", () => {
+    expect(denyReasonText({})).toBe("no reason provided");
+    expect(denyReasonText(undefined)).toBe("no reason provided");
+  });
+});

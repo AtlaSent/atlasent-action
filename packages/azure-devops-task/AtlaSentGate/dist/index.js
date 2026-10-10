@@ -7478,6 +7478,7 @@ var require_dist = __commonJS({
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.resolveFunctionRegion = exports2.parseFunctionRegion = exports2.functionRegionHeaders = exports2.HOSTED_RUNTIME_HOSTS = exports2.FunctionRegionConfigError = exports2.FUNCTION_REGION_HEADER = exports2.FUNCTION_REGION_ENV = exports2.DEFAULT_FUNCTION_REGION = exports2.CLOUD_LOCUS_CONTEXT_KEYS = exports2.EnforceError = void 0;
     exports2.evaluate = evaluate2;
+    exports2.denyReasonText = denyReasonText;
     exports2.verify = verify2;
     exports2.waitForApprovalResolution = waitForApprovalResolution2;
     exports2.requiredBindingsFor = requiredBindingsFor2;
@@ -7595,12 +7596,20 @@ var require_dist = __commonJS({
       }
       return decision;
     }
+    function denyReasonText(decision) {
+      if (decision?.denyReason)
+        return decision.denyReason;
+      if (decision?.denyCode) {
+        return `${decision.denyCode} (the runtime withholds the reason text for this deny code)`;
+      }
+      return "no reason provided";
+    }
     function verify2(decision) {
       switch (decision.decision) {
         case "allow":
           return;
         case "deny":
-          throw new EnforceError2(`Denied: ${decision.denyReason ?? "no reason provided"}`, "verify", decision);
+          throw new EnforceError2(`Denied: ${denyReasonText(decision)}`, "verify", decision);
         case "hold":
           throw new EnforceError2(`On hold: ${decision.holdReason ?? "awaiting approval"}`, "verify", decision);
         case "escalate":

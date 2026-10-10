@@ -30,6 +30,7 @@ import {
   verifyPermit,
   waitForApprovalResolution,
   EnforceError,
+  denyReasonText,
 } from "@atlasent/enforce";
 import type { ApprovalSigningHint, Decision, EnforceConfig } from "@atlasent/enforce";
 import { FUNCTION_REGION_ENV, parseFunctionRegion } from "@atlasent/enforce";
@@ -2318,7 +2319,7 @@ export async function run(): Promise<void> {
         let statusDesc = `AtlaSent: gate error — ${err.message.slice(0, 100)}`;
         if (decision === "deny") {
           statusState = "failure";
-          statusDesc = `AtlaSent: denied — ${err.decision?.denyReason ?? actionType}`.slice(0, 140);
+          statusDesc = `AtlaSent: denied — ${err.decision?.denyReason ?? err.decision?.denyCode ?? actionType}`.slice(0, 140);
         } else if (decision === "hold") {
           statusState = "pending";
           statusDesc = `AtlaSent: on hold — awaiting approval (${actionType})`;
@@ -2348,7 +2349,7 @@ export async function run(): Promise<void> {
 
         const reason =
           decisionStr === "deny"
-            ? (err.decision?.denyReason ?? "no reason provided")
+            ? denyReasonText(err.decision)
             : decisionStr === "hold"
               ? (err.decision?.holdReason ?? "awaiting approval")
               : decisionStr === "escalate"
@@ -2414,7 +2415,7 @@ export async function run(): Promise<void> {
             : "error";
         const summaryReason =
           summaryOutcome === "deny"
-            ? (err.decision?.denyReason ?? err.message)
+            ? (err.decision?.denyReason || err.decision?.denyCode ? denyReasonText(err.decision) : err.message)
             : summaryOutcome === "hold"
               ? (err.decision?.holdReason ?? "awaiting approval")
               : summaryOutcome === "escalate"
@@ -2449,7 +2450,7 @@ export async function run(): Promise<void> {
           switch (err.decision?.decision) {
             case "deny":
               setFailed(
-                `Authorization DENIED: ${err.decision.denyReason ?? "no reason provided"}`,
+                `Authorization DENIED: ${denyReasonText(err.decision)}`,
               );
               break;
             case "hold":
