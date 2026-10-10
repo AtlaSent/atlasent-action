@@ -227,6 +227,14 @@ export declare class EnforceError extends Error {
     });
 }
 export declare function evaluate(config: EnforceConfig): Promise<Decision>;
+/**
+ * The text to show for a deny. v1-evaluate withholds `deny_reason` for
+ * deny codes outside its `safe` disclosure tier (ADR-024: the free text could
+ * reveal which rule or role a caller failed), but it always sends `deny_code`.
+ * Reading only `denyReason` therefore reported "no reason provided" for, e.g.,
+ * ACTOR_NOT_ALLOWED, when the runtime had named the failed rule.
+ */
+export declare function denyReasonText(decision: Pick<Decision, "denyReason" | "denyCode"> | null | undefined): string;
 export declare function verify(decision: Decision): void;
 export interface WaitForApprovalConfig extends FunctionRegionOption {
     apiKey: string;

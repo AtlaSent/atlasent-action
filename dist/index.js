@@ -179,6 +179,7 @@ var require_dist = __commonJS({
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.resolveFunctionRegion = exports2.parseFunctionRegion = exports2.functionRegionHeaders = exports2.HOSTED_RUNTIME_HOSTS = exports2.FunctionRegionConfigError = exports2.FUNCTION_REGION_HEADER = exports2.FUNCTION_REGION_ENV = exports2.DEFAULT_FUNCTION_REGION = exports2.CLOUD_LOCUS_CONTEXT_KEYS = exports2.EnforceError = void 0;
     exports2.evaluate = evaluate2;
+    exports2.denyReasonText = denyReasonText2;
     exports2.verify = verify2;
     exports2.waitForApprovalResolution = waitForApprovalResolution3;
     exports2.requiredBindingsFor = requiredBindingsFor4;
@@ -296,12 +297,20 @@ var require_dist = __commonJS({
       }
       return decision;
     }
+    function denyReasonText2(decision) {
+      if (decision?.denyReason)
+        return decision.denyReason;
+      if (decision?.denyCode) {
+        return `${decision.denyCode} (the runtime withholds the reason text for this deny code)`;
+      }
+      return "no reason provided";
+    }
     function verify2(decision) {
       switch (decision.decision) {
         case "allow":
           return;
         case "deny":
-          throw new EnforceError2(`Denied: ${decision.denyReason ?? "no reason provided"}`, "verify", decision);
+          throw new EnforceError2(`Denied: ${denyReasonText2(decision)}`, "verify", decision);
         case "hold":
           throw new EnforceError2(`On hold: ${decision.holdReason ?? "awaiting approval"}`, "verify", decision);
         case "escalate":
@@ -5018,7 +5027,7 @@ async function run() {
         let statusDesc = `AtlaSent: gate error \u2014 ${err.message.slice(0, 100)}`;
         if (decision === "deny") {
           statusState = "failure";
-          statusDesc = `AtlaSent: denied \u2014 ${err.decision?.denyReason ?? actionType}`.slice(0, 140);
+          statusDesc = `AtlaSent: denied \u2014 ${err.decision?.denyReason ?? err.decision?.denyCode ?? actionType}`.slice(0, 140);
         } else if (decision === "hold") {
           statusState = "pending";
           statusDesc = `AtlaSent: on hold \u2014 awaiting approval (${actionType})`;
@@ -5041,7 +5050,7 @@ async function run() {
         const runUrl = `${gh.server_url}/${gh.repository}/actions/runs/${gh.run_id}`;
         const decisionStr = err.decision?.decision ?? "error";
         const isActionable = decisionStr === "deny" || decisionStr === "hold" || decisionStr === "escalate";
-        const reason = decisionStr === "deny" ? err.decision?.denyReason ?? "no reason provided" : decisionStr === "hold" ? err.decision?.holdReason ?? "awaiting approval" : decisionStr === "escalate" ? "escalated \u2014 manual review required" : err.message.slice(0, 200);
+        const reason = decisionStr === "deny" ? (0, import_enforce14.denyReasonText)(err.decision) : decisionStr === "hold" ? err.decision?.holdReason ?? "awaiting approval" : decisionStr === "escalate" ? "escalated \u2014 manual review required" : err.message.slice(0, 200);
         if (slackWebhook && isActionable) {
           await notifySlack(slackWebhook, {
             decision: decisionStr,
@@ -5087,7 +5096,7 @@ async function run() {
       {
         const blockedDecision = err.decision?.decision;
         const summaryOutcome = blockedDecision === "deny" || blockedDecision === "hold" || blockedDecision === "escalate" ? blockedDecision : "error";
-        const summaryReason = summaryOutcome === "deny" ? err.decision?.denyReason ?? err.message : summaryOutcome === "hold" ? err.decision?.holdReason ?? "awaiting approval" : summaryOutcome === "escalate" ? "manual review required" : err.message;
+        const summaryReason = summaryOutcome === "deny" ? err.decision?.denyReason || err.decision?.denyCode ? (0, import_enforce14.denyReasonText)(err.decision) : err.message : summaryOutcome === "hold" ? err.decision?.holdReason ?? "awaiting approval" : summaryOutcome === "escalate" ? "manual review required" : err.message;
         appendToStepSummary(
           buildGateStepSummary({
             outcome: summaryOutcome,
@@ -5116,7 +5125,7 @@ async function run() {
           switch (err.decision?.decision) {
             case "deny":
               setFailed(
-                `Authorization DENIED: ${err.decision.denyReason ?? "no reason provided"}`
+                `Authorization DENIED: ${(0, import_enforce14.denyReasonText)(err.decision)}`
               );
               break;
             case "hold":

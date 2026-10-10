@@ -367,13 +367,30 @@ export async function evaluate(config: EnforceConfig): Promise<Decision> {
 // Step 2 — verify (decision check — no HTTP call)
 // ---------------------------------------------------------------------------
 
+/**
+ * The text to show for a deny. v1-evaluate withholds `deny_reason` for
+ * deny codes outside its `safe` disclosure tier (ADR-024: the free text could
+ * reveal which rule or role a caller failed), but it always sends `deny_code`.
+ * Reading only `denyReason` therefore reported "no reason provided" for, e.g.,
+ * ACTOR_NOT_ALLOWED, when the runtime had named the failed rule.
+ */
+export function denyReasonText(
+  decision: Pick<Decision, "denyReason" | "denyCode"> | null | undefined,
+): string {
+  if (decision?.denyReason) return decision.denyReason;
+  if (decision?.denyCode) {
+    return `${decision.denyCode} (the runtime withholds the reason text for this deny code)`;
+  }
+  return "no reason provided";
+}
+
 export function verify(decision: Decision): void {
   switch (decision.decision) {
     case "allow":
       return;
     case "deny":
       throw new EnforceError(
-        `Denied: ${decision.denyReason ?? "no reason provided"}`,
+        `Denied: ${denyReasonText(decision)}`,
         "verify",
         decision,
       );
