@@ -582,6 +582,9 @@ describe("allow response", () => {
       ["no artifact-digest", { "target-id": "npm:@acme/widget" }],
       ["a non-sha256 digest", { "target-id": "npm:@acme/widget", "artifact-digest": "md5:abc" }],
       ["no target-id", { "artifact-digest": "sha256:" + "a".repeat(64) }],
+      ["wait-for-approval (assertions would be stale at claim)", {
+        "target-id": "npm:@acme/widget", "artifact-digest": "sha256:" + "a".repeat(64), "wait-for-approval": "true",
+      }],
     ])("fails closed before any mint or evaluate with %s", async (_name, inputs) => {
       setApiKey();
       setInput("action", "artifact.release");

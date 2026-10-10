@@ -1121,6 +1121,11 @@ async function bindBatchWorkloadIdentities(items, cfg, deps) {
   const mint = deps.mintWorkloadIdentity ?? mintGithubActionsActorIdentity;
   const bound = [];
   for (const item of items) {
+    if (SUPPLY_CHAIN_ASSERTION_ACTIONS.has(item.action) || VERIFIED_ACTOR_REQUIRED_ACTIONS.has(item.action)) {
+      throw new WorkloadIdentityError(
+        `"${item.action}" is not supported in batch mode: it needs a verified actor and a supply_chain assertion minted per artifact. Evaluate it with the single \`action:\` input instead.`
+      );
+    }
     const sanitized = { ...item };
     delete sanitized.actor_identity;
     if (item.action === PRODUCTION_DEPLOY_ACTION) {
@@ -4979,6 +4984,10 @@ async function run() {
       setOutput("verify-error-code", "ASSERTION_UNVERIFIED");
       setFailed(`AtlaSent Gate: ${why} Release blocked (fail-closed).`);
     };
+    if ((getInput("wait-for-approval") || "false").trim().toLowerCase() === "true") {
+      failClosed(`"${actionType}" does not support \`wait-for-approval\`: its verified actor and supply_chain assertion are minted before evaluate and are not refreshed after a human wait.`);
+      return;
+    }
     if (!supplyChainDigest) {
       failClosed(`"${actionType}" needs \`artifact-digest\` as sha256:<64 hex> so a supply_chain assertion can be minted for it.`);
       return;

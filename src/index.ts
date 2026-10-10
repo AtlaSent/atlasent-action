@@ -2112,6 +2112,13 @@ export async function run(): Promise<void> {
       setOutput("verify-error-code", "ASSERTION_UNVERIFIED");
       setFailed(`AtlaSent Gate: ${why} Release blocked (fail-closed).`);
     };
+    // The actor and supply_chain assertions are short-lived and minted here,
+    // before evaluate. A claim after a human wait would present stale ones
+    // (Codex on atlasent-action#199), so this action does not wait.
+    if ((getInput("wait-for-approval") || "false").trim().toLowerCase() === "true") {
+      failClosed(`"${actionType}" does not support \`wait-for-approval\`: its verified actor and supply_chain assertion are minted before evaluate and are not refreshed after a human wait.`);
+      return;
+    }
     if (!supplyChainDigest) {
       failClosed(`"${actionType}" needs \`artifact-digest\` as sha256:<64 hex> so a supply_chain assertion can be minted for it.`);
       return;
