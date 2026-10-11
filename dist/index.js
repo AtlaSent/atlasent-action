@@ -785,6 +785,10 @@ async function loopEvaluate(apiUrl, headers, items) {
   return { decisions, batchId: `loop-${Date.now()}` };
 }
 
+// src/apiKeyHint.ts
+var API_KEY_SIGNUP_URL = "https://console.atlasent.io/auth/sign-up?utm_source=github-action&utm_medium=error";
+var MISSING_API_KEY_HINT = `Add it as a repository or organization secret. Get a free API key at ${API_KEY_SIGNUP_URL}`;
+
 // src/inputs.ts
 function parseInputs(env) {
   const apiKey = required(env, "ATLASENT_API_KEY");
@@ -860,7 +864,7 @@ function required(env, key) {
   const v = env[key];
   if (!v) {
     throw new Error(
-      key === "ATLASENT_API_KEY" ? "Missing required secret: ATLASENT_API_KEY" : `Missing required input: ${key.replace("INPUT_", "").toLowerCase()}`
+      key === "ATLASENT_API_KEY" ? `Missing required secret: ATLASENT_API_KEY. ${MISSING_API_KEY_HINT}` : `Missing required input: ${key.replace("INPUT_", "").toLowerCase()}`
     );
   }
   return v;
@@ -3630,7 +3634,7 @@ async function runInsightsEvaluate(cfg, log = console) {
 function getApiKey() {
   const apiKey = (process.env["ATLASENT_API_KEY"] ?? "").trim();
   if (!apiKey) {
-    setFailed("ATLASENT_API_KEY is required");
+    setFailed(`ATLASENT_API_KEY is required. ${MISSING_API_KEY_HINT}`);
   }
   return apiKey;
 }

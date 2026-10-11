@@ -14,6 +14,7 @@ import {
   assertValidActionType,
   normalizeProtectedAction,
 } from "./canonicalAction";
+import { MISSING_API_KEY_HINT } from "./apiKeyHint";
 
 // Re-exported for backward compatibility with consumers (and tests) that
 // imported `PROTECTED_ACTION` from this module before the canonical
@@ -134,7 +135,7 @@ function required(env: Record<string, string | undefined>, key: string): string 
   if (!v) {
     throw new Error(
       key === "ATLASENT_API_KEY"
-        ? "Missing required secret: ATLASENT_API_KEY"
+        ? `Missing required secret: ATLASENT_API_KEY. ${MISSING_API_KEY_HINT}`
         : `Missing required input: ${key.replace("INPUT_", "").toLowerCase()}`,
     );
   }

@@ -205,3 +205,11 @@ describe("parseInputs", () => {
     expect(out.single?.action).toBe("production.deploy");
   });
 });
+
+describe("missing ATLASENT_API_KEY", () => {
+  it("names the secret and links to sign-up, attributed to this Action", () => {
+    expect(() => parseInputs({ "INPUT_ACTION": "production.deploy" })).toThrow(
+      /^Missing required secret: ATLASENT_API_KEY\. Add it as a repository or organization secret\. Get a free API key at https:\/\/console\.atlasent\.io\/auth\/sign-up\?utm_source=github-action&utm_medium=error$/,
+    );
+  });
+});

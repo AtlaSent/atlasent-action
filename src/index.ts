@@ -90,11 +90,12 @@ import {
 } from "./githubApprovalMint";
 import { renderPostureStepSummary, runPostureScan } from "./postureScan";
 import { runInsightsEvaluate } from "./insights";
+import { MISSING_API_KEY_HINT } from "./apiKeyHint";
 
 function getApiKey(): string {
   const apiKey = (process.env["ATLASENT_API_KEY"] ?? "").trim();
   if (!apiKey) {
-    setFailed("ATLASENT_API_KEY is required");
+    setFailed(`ATLASENT_API_KEY is required. ${MISSING_API_KEY_HINT}`);
   }
   return apiKey;
 }

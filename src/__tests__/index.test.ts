@@ -335,6 +335,12 @@ describe("missing required inputs", () => {
     await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
     expect(getExitCalls()).toContain(1);
     expect(getConsoleLogs().some((l) => l.includes("ATLASENT_API_KEY is required"))).toBe(true);
+    // The failure says where to get a key, attributed to this Action.
+    expect(
+      getConsoleLogs().some((l) =>
+        l.includes("https://console.atlasent.io/auth/sign-up?utm_source=github-action&utm_medium=error"),
+      ),
+    ).toBe(true);
   });
 
   it("calls process.exit(1) when action is missing on the single-eval path", async () => {
