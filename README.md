@@ -25,15 +25,32 @@ AtlaSent evaluates authorization under organizational authority
 protected step may run
 ```
 
+## Get started in three steps
+
+1. **Create a free account** at [console.atlasent.io](https://console.atlasent.io/auth/sign-up?utm_source=github-action&utm_medium=readme).
+2. **Create an API key** in the console under [API keys](https://console.atlasent.io/api-keys)
+   with `evaluate:write` and `verify:execute`. For `production.deploy`, also add
+   `idp_broker:mint` (an org admin grants it). Save the key as the repository
+   secret `ATLASENT_API_KEY`.
+3. **Link your deploy workflow** under
+   [Integrations → GitHub](https://console.atlasent.io/integrations/github): enter
+   the repository, the workflow file, the branch and the GitHub `environment:` the
+   job runs in. Without this link, `production.deploy` is denied
+   `ACTOR_UNVERIFIED`. No GitHub App installation is needed.
+
+Then add the step below. `ATLASENT_BASE_URL` is optional on the hosted service:
+it defaults to `https://api.atlasent.io/functions/v1`. Set it only for a
+self-hosted or dedicated runtime.
+
 ## Release status
 
-**v1.6.0 is published.** The floating `v1` tag points to the reviewed v1.6.0
-release commit, which includes the security fix preventing caller-supplied
-context from overriding verified GitHub-derived facts.
+**v1.9.0 is the current release.** The floating `v1` tag points to it. Every
+release since v1.6.0 includes the security fix preventing caller-supplied context
+from overriding verified GitHub-derived facts.
 
-Use `Atlasent/atlasent-action@v1` for the normal floating-major
+Use `AtlaSent/atlasent-action@v1` for the normal floating-major
 form. Organizations that require an immutable dependency pin can use
-`Atlasent/atlasent-action@eaf6e17c50340f97a5a1cec53d9aea9b64c2a6f1`.
+`AtlaSent/atlasent-action@8dd4cffb81f460dc8d468740b54439c0606e23ef` (v1.9.0).
 
 ## Quick start
 
@@ -51,7 +68,6 @@ jobs:
         uses: Atlasent/atlasent-action@v1
         env:
           ATLASENT_API_KEY: ${{ secrets.ATLASENT_API_KEY }}
-          ATLASENT_BASE_URL: ${{ secrets.ATLASENT_BASE_URL }}
         with:
           action: production.deploy
           environment: production
