@@ -31,9 +31,11 @@ try {
   console.log("deployed", decision.evaluationId);
 } catch (err) {
   if (err instanceof EnforceError) {
-    // err.phase: "evaluate" | "verify" | "verify-permit" | "execute"
+    // Blocked before your function ran.
+    // err.phase: "evaluate" | "verify" | "verify-permit"
     console.error(`blocked at ${err.phase}: ${err.message}`);
   }
+  // Anything else came from your own function, which throws unchanged.
   throw err;
 }
 ```
