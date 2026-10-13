@@ -4,10 +4,10 @@
   "description": "AtlaSent execution-authority connectors (agent / webhook / Supabase-migration guards) — authorize-before-execute for any Node runtime",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Atlasent/atlasent-action.git",
+    "url": "git+https://github.com/AtlaSent/atlasent-action.git",
     "directory": "packages/action"
   },
-  "homepage": "https://github.com/Atlasent/atlasent-action/tree/main/packages/action#readme",
+  "homepage": "https://github.com/AtlaSent/atlasent-action/tree/main/packages/action#readme",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {

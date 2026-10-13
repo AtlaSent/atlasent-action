@@ -2,12 +2,26 @@
   "name": "@atlasent/enforce",
   "version": "2.1.0",
   "description": "Fail-closed execution wrapper enforcing the AtlaSent evaluate → verify → execute contract",
+  "keywords": [
+    "atlasent",
+    "authorization",
+    "ai-agent",
+    "agent-guardrails",
+    "guardrails",
+    "deploy-gate",
+    "ci-cd",
+    "fail-closed",
+    "permits",
+    "audit",
+    "approval",
+    "mcp"
+  ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Atlasent/atlasent-action.git",
+    "url": "git+https://github.com/AtlaSent/atlasent-action.git",
     "directory": "packages/enforce"
   },
-  "homepage": "https://github.com/Atlasent/atlasent-action/tree/main/packages/enforce#readme",
+  "homepage": "https://github.com/AtlaSent/atlasent-action/tree/main/packages/enforce#readme",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
