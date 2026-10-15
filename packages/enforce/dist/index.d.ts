@@ -223,6 +223,17 @@ export interface VerifyPermitResult {
     mismatchFields?: string[];
 }
 export type EnforcePhase = "evaluate" | "verify" | "verify-permit" | "execute";
+/**
+ * True only when `err` is an EnforceError that `enforce()` raised at its own
+ * gate (evaluate, verify or verify-permit) before the protected callback ran.
+ *
+ * `err instanceof EnforceError` is NOT that proof: a protected callback can
+ * itself throw an EnforceError (for example from a nested `enforce()` call or
+ * a direct `evaluate()`), and `enforce()` propagates callback errors
+ * unchanged. Such an error returns `false` here, because the callback, and any
+ * effects it began, had already run (#206).
+ */
+export declare function isBlockedBeforeExecution(err: unknown): err is EnforceError;
 export declare class EnforceError extends Error {
     readonly phase: EnforcePhase;
     readonly decision: Decision | null;
@@ -236,6 +247,11 @@ export declare class EnforceError extends Error {
         verifyErrorCode?: string;
         mismatchFields?: string[];
     });
+    /**
+     * True only when `enforce()` raised this error at its gate before the
+     * protected callback ran. See {@link isBlockedBeforeExecution}.
+     */
+    get blockedBeforeExecution(): boolean;
 }
 export declare function evaluate(config: EnforceConfig): Promise<Decision>;
 /**

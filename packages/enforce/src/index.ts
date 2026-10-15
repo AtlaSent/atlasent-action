@@ -243,6 +243,25 @@ export interface VerifyPermitResult {
 
 export type EnforcePhase = "evaluate" | "verify" | "verify-permit" | "execute";
 
+// Errors that enforce() itself raised at the authorization boundary, before the
+// protected callback was called. Module-private, so a callback cannot forge
+// membership by constructing its own EnforceError (#206).
+const blockedBeforeExecutionErrors = new WeakSet<object>();
+
+/**
+ * True only when `err` is an EnforceError that `enforce()` raised at its own
+ * gate (evaluate, verify or verify-permit) before the protected callback ran.
+ *
+ * `err instanceof EnforceError` is NOT that proof: a protected callback can
+ * itself throw an EnforceError (for example from a nested `enforce()` call or
+ * a direct `evaluate()`), and `enforce()` propagates callback errors
+ * unchanged. Such an error returns `false` here, because the callback, and any
+ * effects it began, had already run (#206).
+ */
+export function isBlockedBeforeExecution(err: unknown): err is EnforceError {
+  return err instanceof EnforceError && blockedBeforeExecutionErrors.has(err);
+}
+
 export class EnforceError extends Error {
   readonly phase: EnforcePhase;
   readonly decision: Decision | null;
@@ -265,6 +284,14 @@ export class EnforceError extends Error {
     this.outcome = details?.outcome;
     this.verifyErrorCode = details?.verifyErrorCode;
     this.mismatchFields = details?.mismatchFields;
+  }
+
+  /**
+   * True only when `enforce()` raised this error at its gate before the
+   * protected callback ran. See {@link isBlockedBeforeExecution}.
+   */
+  get blockedBeforeExecution(): boolean {
+    return blockedBeforeExecutionErrors.has(this);
   }
 }
 
@@ -902,11 +929,28 @@ export async function enforce<T>(
   config: EnforceConfig,
   fn: () => Promise<T>,
 ): Promise<{ result: T; decision: Decision; verifyOutcome?: string }> {
-  const decision = await evaluate(config);   // throws EnforceError → fn never runs
-  verify(decision);                          // throws EnforceError → fn never runs
-  const vp = await verifyPermit(config, decision); // throws EnforceError → fn never runs
-  const result = await fn();
-  return { result, decision, verifyOutcome: vp.outcome };
+  let decision: Decision;
+  let vp: VerifyPermitResult;
+  try {
+    decision = await evaluate(config);   // throws EnforceError → fn never runs
+    verify(decision);                    // throws EnforceError → fn never runs
+    vp = await verifyPermit(config, decision); // throws EnforceError → fn never runs
+  } catch (err) {
+    // Only errors raised here, before fn is called, are marked as gate blocks.
+    if (err instanceof EnforceError) blockedBeforeExecutionErrors.add(err);
+    throw err;
+  }
+  try {
+    const result = await fn();
+    return { result, decision, verifyOutcome: vp.outcome };
+  } catch (err) {
+    // The callback ran. Its errors propagate unchanged (same object), but an
+    // EnforceError escaping from it must never read as "blocked before your
+    // function ran" — not even one a nested enforce() marked at its own gate,
+    // since this call's function had already started (#206).
+    if (err instanceof EnforceError) blockedBeforeExecutionErrors.delete(err);
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -15,7 +15,7 @@ and copy a key from the console.
 ## Usage
 
 ```ts
-import { enforce, EnforceError } from "@atlasent/enforce";
+import { enforce, EnforceError, isBlockedBeforeExecution } from "@atlasent/enforce";
 
 try {
   const { result, decision } = await enforce(
@@ -30,12 +30,16 @@ try {
   );
   console.log("deployed", decision.evaluationId);
 } catch (err) {
-  if (err instanceof EnforceError) {
-    // Blocked before your function ran.
+  if (isBlockedBeforeExecution(err)) {
+    // enforce() raised this at its gate: your function never ran.
     // err.phase: "evaluate" | "verify" | "verify-permit"
-    console.error(`blocked at ${err.phase}: ${err.message}`);
+    console.error(`blocked before your function ran, at ${err.phase}: ${err.message}`);
+  } else if (err instanceof EnforceError) {
+    // Your function ran and threw an EnforceError of its own (for example
+    // from a nested enforce() call). Its effects may already have begun.
+    console.error(`your function ran, then failed: ${err.message}`);
   }
-  // Anything else came from your own function, which throws unchanged.
+  // Anything else also came from your own function, which throws unchanged.
   throw err;
 }
 ```
@@ -51,6 +55,14 @@ try {
 
 There is no fail-open path. When AtlaSent cannot be reached, the action does
 not run.
+
+`err instanceof EnforceError` alone does not prove your function was blocked.
+Your function can throw an `EnforceError` itself, and `enforce()` passes it
+through unchanged. Use `isBlockedBeforeExecution(err)` (or
+`err.blockedBeforeExecution`): it is `true` only for an error `enforce()`
+raised in one of the three steps above, before calling your function. An
+`EnforceError` that escapes from your function, including one a nested
+`enforce()` raised at its own gate, reports `false`.
 
 ## Lower-level building blocks
 

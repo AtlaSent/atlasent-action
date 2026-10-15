@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { enforce, EnforceError } from "../index";
+import { enforce, EnforceError, isBlockedBeforeExecution } from "../index";
 import type { Decision } from "../index";
 
 vi.mock("../transport", () => ({ post: vi.fn() }));
@@ -156,5 +156,101 @@ describe("enforce — contract invariants", () => {
     expect(err.phase).toBe("verify-permit");
     expect(err.decision?.decision).toBe("allow");
     expect(err.decision?.permitToken).toBe("pt-abc");
+  });
+});
+
+// #206: `instanceof EnforceError` is not proof the callback was blocked. The
+// README's handler prints "blocked before your function ran" only when
+// isBlockedBeforeExecution(err) holds; these pin that classification.
+describe("enforce — gate errors vs callback errors (#206)", () => {
+  beforeEach(() => mockPost.mockReset());
+  afterEach(() => vi.restoreAllMocks());
+
+  /** The README example's catch-block classification, verbatim in logic. */
+  function readmeMessage(err: unknown): string {
+    if (isBlockedBeforeExecution(err)) {
+      return `blocked before your function ran, at ${err.phase}: ${err.message}`;
+    }
+    if (err instanceof EnforceError) return `your function ran, then failed: ${err.message}`;
+    return "other";
+  }
+
+  it("a callback that ran and then threw an EnforceError is not classified as blocked", async () => {
+    mockAllow();
+    const ran: string[] = [];
+    const thrown = new EnforceError("callback-side failure", "evaluate");
+    const fn = vi.fn(async () => {
+      ran.push("effect started");
+      throw thrown;
+    });
+
+    let caught: unknown;
+    try {
+      await enforce(BASE_CONFIG, fn);
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(ran).toEqual(["effect started"]);
+    expect(caught).toBe(thrown); // propagated unchanged
+    expect(isBlockedBeforeExecution(caught)).toBe(false);
+    expect((caught as EnforceError).blockedBeforeExecution).toBe(false);
+    expect(readmeMessage(caught)).not.toContain("blocked before your function ran");
+  });
+
+  it("a nested enforce() gate denial escaping the outer callback is not classified as blocked", async () => {
+    // Outer: allow + verified. Inner (inside the callback): deny.
+    mockAllow();
+    mockResponse(200, DENY_RESPONSE);
+    const ran: string[] = [];
+    const fn = vi.fn(async () => {
+      ran.push("outer effect started");
+      return enforce(BASE_CONFIG, async () => "inner");
+    });
+
+    let caught: unknown;
+    try {
+      await enforce(BASE_CONFIG, fn);
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(ran).toEqual(["outer effect started"]);
+    expect(caught).toBeInstanceOf(EnforceError);
+    expect((caught as EnforceError).phase).toBe("verify");
+    expect(isBlockedBeforeExecution(caught)).toBe(false);
+    expect(readmeMessage(caught)).not.toContain("blocked before your function ran");
+  });
+
+  it.each([
+    ["evaluate", () => mockPost.mockRejectedValueOnce(new Error("ECONNREFUSED"))],
+    ["verify", () => mockResponse(200, DENY_RESPONSE)],
+    [
+      "verify-permit",
+      () => {
+        mockResponse(200, ALLOW_RESPONSE);
+        mockResponse(200, { verified: false, outcome: "permit_consumed" });
+      },
+    ],
+  ] as const)("a real gate failure at %s is classified as blocked before execution", async (phase, arrange) => {
+    arrange();
+    const fn = vi.fn();
+    let caught: unknown;
+    try {
+      await enforce(BASE_CONFIG, fn);
+    } catch (e) {
+      caught = e;
+    }
+    expect(fn).not.toHaveBeenCalled();
+    expect((caught as EnforceError).phase).toBe(phase);
+    expect(isBlockedBeforeExecution(caught)).toBe(true);
+    expect((caught as EnforceError).blockedBeforeExecution).toBe(true);
+    expect(readmeMessage(caught)).toContain("blocked before your function ran");
+  });
+
+  it("an EnforceError constructed outside enforce() is never classified as blocked", () => {
+    expect(isBlockedBeforeExecution(new EnforceError("forged", "evaluate"))).toBe(false);
+    expect(isBlockedBeforeExecution(new Error("x"))).toBe(false);
+    expect(isBlockedBeforeExecution(undefined)).toBe(false);
   });
 });
