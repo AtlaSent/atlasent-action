@@ -243,6 +243,25 @@ export interface VerifyPermitResult {
 
 export type EnforcePhase = "evaluate" | "verify" | "verify-permit" | "execute";
 
+// Errors that enforce() itself raised at the authorization boundary, before the
+// protected callback was called. Module-private, so a callback cannot forge
+// membership by constructing its own EnforceError (#206).
+const blockedBeforeExecutionErrors = new WeakSet<object>();
+
+/**
+ * True only when `err` is an EnforceError that `enforce()` raised at its own
+ * gate (evaluate, verify or verify-permit) before the protected callback ran.
+ *
+ * `err instanceof EnforceError` is NOT that proof: a protected callback can
+ * itself throw an EnforceError (for example from a nested `enforce()` call or
+ * a direct `evaluate()`), and `enforce()` propagates callback errors
+ * unchanged. Such an error returns `false` here, because the callback, and any
+ * effects it began, had already run (#206).
+ */
+export function isBlockedBeforeExecution(err: unknown): err is EnforceError {
+  return err instanceof EnforceError && blockedBeforeExecutionErrors.has(err);
+}
+
 export class EnforceError extends Error {
   readonly phase: EnforcePhase;
   readonly decision: Decision | null;
@@ -265,6 +284,14 @@ export class EnforceError extends Error {
     this.outcome = details?.outcome;
     this.verifyErrorCode = details?.verifyErrorCode;
     this.mismatchFields = details?.mismatchFields;
+  }
+
+  /**
+   * True only when `enforce()` raised this error at its gate before the
+   * protected callback ran. See {@link isBlockedBeforeExecution}.
+   */
+  get blockedBeforeExecution(): boolean {
+    return blockedBeforeExecutionErrors.has(this);
   }
 }
 
@@ -898,15 +925,50 @@ export async function reverifyPermit(
 // Step 4 — enforce (evaluate → verify → verifyPermit → execute, fail-closed)
 // ---------------------------------------------------------------------------
 
+// An unmarked copy of a nested gate error, for an outer enforce() whose own
+// callback had already started when the nested gate refused (#206).
+function ranThenFailedCopy(err: EnforceError): EnforceError {
+  const copy = new EnforceError(err.message, err.phase, err.decision, {
+    outcome: err.outcome,
+    verifyErrorCode: err.verifyErrorCode,
+    mismatchFields: err.mismatchFields,
+  });
+  Object.defineProperty(copy, "cause", { value: err, enumerable: false, configurable: true, writable: true });
+  return copy;
+}
+
 export async function enforce<T>(
   config: EnforceConfig,
   fn: () => Promise<T>,
 ): Promise<{ result: T; decision: Decision; verifyOutcome?: string }> {
-  const decision = await evaluate(config);   // throws EnforceError → fn never runs
-  verify(decision);                          // throws EnforceError → fn never runs
-  const vp = await verifyPermit(config, decision); // throws EnforceError → fn never runs
-  const result = await fn();
-  return { result, decision, verifyOutcome: vp.outcome };
+  let decision: Decision;
+  let vp: VerifyPermitResult;
+  try {
+    decision = await evaluate(config);   // throws EnforceError → fn never runs
+    verify(decision);                    // throws EnforceError → fn never runs
+    vp = await verifyPermit(config, decision); // throws EnforceError → fn never runs
+  } catch (err) {
+    // Only errors raised here, before fn is called, are marked as gate blocks.
+    if (err instanceof EnforceError) blockedBeforeExecutionErrors.add(err);
+    throw err;
+  }
+  try {
+    const result = await fn();
+    return { result, decision, verifyOutcome: vp.outcome };
+  } catch (err) {
+    // The callback ran, so nothing escaping from it may read as "blocked
+    // before your function ran" (#206). Callback errors propagate unchanged
+    // (same object) with one exception: a gate error a nested enforce() raised
+    // inside the callback. That object is still a true gate block for the
+    // nested call's own callers, so it is never unmarked here (the shared
+    // WeakSet would then depend on which consumer observed it last). This
+    // call throws a fresh, unmarked copy instead, with the original as
+    // `cause`.
+    if (err instanceof EnforceError && blockedBeforeExecutionErrors.has(err)) {
+      throw ranThenFailedCopy(err);
+    }
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
