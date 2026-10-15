@@ -7825,6 +7825,15 @@ var require_dist = __commonJS({
       }
       return r;
     }
+    function ranThenFailedCopy(err) {
+      const copy = new EnforceError2(err.message, err.phase, err.decision, {
+        outcome: err.outcome,
+        verifyErrorCode: err.verifyErrorCode,
+        mismatchFields: err.mismatchFields
+      });
+      Object.defineProperty(copy, "cause", { value: err, enumerable: false, configurable: true, writable: true });
+      return copy;
+    }
     async function enforce(config, fn) {
       let decision;
       let vp;
@@ -7841,8 +7850,9 @@ var require_dist = __commonJS({
         const result = await fn();
         return { result, decision, verifyOutcome: vp.outcome };
       } catch (err) {
-        if (err instanceof EnforceError2)
-          blockedBeforeExecutionErrors.delete(err);
+        if (err instanceof EnforceError2 && blockedBeforeExecutionErrors.has(err)) {
+          throw ranThenFailedCopy(err);
+        }
         throw err;
       }
     }

@@ -61,8 +61,10 @@ Your function can throw an `EnforceError` itself, and `enforce()` passes it
 through unchanged. Use `isBlockedBeforeExecution(err)` (or
 `err.blockedBeforeExecution`): it is `true` only for an error `enforce()`
 raised in one of the three steps above, before calling your function. An
-`EnforceError` that escapes from your function, including one a nested
-`enforce()` raised at its own gate, reports `false`.
+`EnforceError` that escapes from your function reports `false`. If it is one a
+nested `enforce()` raised at its own gate, the outer call throws a copy with the
+original as `cause`, so the nested call's own callers still see `true` and the
+outer caller sees `false`.
 
 ## Lower-level building blocks
 

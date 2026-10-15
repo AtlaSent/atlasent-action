@@ -222,6 +222,40 @@ describe("enforce — gate errors vs callback errors (#206)", () => {
     expect(readmeMessage(caught)).not.toContain("blocked before your function ran");
   });
 
+  it("an outer call does not change how the nested call's own callers see the same gate error", async () => {
+    // Outer: allow + verified. Inner (inside the callback): deny at verify.
+    mockAllow();
+    mockResponse(200, DENY_RESPONSE);
+    const innerFn = vi.fn(async () => "inner");
+    let inner!: Promise<unknown>;
+    const outerFn = vi.fn(async () => {
+      inner = enforce(BASE_CONFIG, innerFn);
+      return inner;
+    });
+
+    let outerErr: unknown;
+    try {
+      await enforce(BASE_CONFIG, outerFn);
+    } catch (e) {
+      outerErr = e;
+    }
+    // Observed AFTER the outer rejection settled.
+    let innerErr: unknown;
+    try {
+      await inner;
+    } catch (e) {
+      innerErr = e;
+    }
+
+    expect(innerFn).not.toHaveBeenCalled();
+    expect(isBlockedBeforeExecution(innerErr)).toBe(true);
+    expect(isBlockedBeforeExecution(outerErr)).toBe(false);
+    expect(outerErr).not.toBe(innerErr);
+    expect((outerErr as Error & { cause?: unknown }).cause).toBe(innerErr);
+    expect((outerErr as EnforceError).phase).toBe((innerErr as EnforceError).phase);
+    expect(readmeMessage(outerErr)).not.toContain("blocked before your function ran");
+  });
+
   it.each([
     ["evaluate", () => mockPost.mockRejectedValueOnce(new Error("ECONNREFUSED"))],
     ["verify", () => mockResponse(200, DENY_RESPONSE)],

@@ -925,6 +925,18 @@ export async function reverifyPermit(
 // Step 4 — enforce (evaluate → verify → verifyPermit → execute, fail-closed)
 // ---------------------------------------------------------------------------
 
+// An unmarked copy of a nested gate error, for an outer enforce() whose own
+// callback had already started when the nested gate refused (#206).
+function ranThenFailedCopy(err: EnforceError): EnforceError {
+  const copy = new EnforceError(err.message, err.phase, err.decision, {
+    outcome: err.outcome,
+    verifyErrorCode: err.verifyErrorCode,
+    mismatchFields: err.mismatchFields,
+  });
+  Object.defineProperty(copy, "cause", { value: err, enumerable: false, configurable: true, writable: true });
+  return copy;
+}
+
 export async function enforce<T>(
   config: EnforceConfig,
   fn: () => Promise<T>,
@@ -944,11 +956,17 @@ export async function enforce<T>(
     const result = await fn();
     return { result, decision, verifyOutcome: vp.outcome };
   } catch (err) {
-    // The callback ran. Its errors propagate unchanged (same object), but an
-    // EnforceError escaping from it must never read as "blocked before your
-    // function ran" — not even one a nested enforce() marked at its own gate,
-    // since this call's function had already started (#206).
-    if (err instanceof EnforceError) blockedBeforeExecutionErrors.delete(err);
+    // The callback ran, so nothing escaping from it may read as "blocked
+    // before your function ran" (#206). Callback errors propagate unchanged
+    // (same object) with one exception: a gate error a nested enforce() raised
+    // inside the callback. That object is still a true gate block for the
+    // nested call's own callers, so it is never unmarked here (the shared
+    // WeakSet would then depend on which consumer observed it last). This
+    // call throws a fresh, unmarked copy instead, with the original as
+    // `cause`.
+    if (err instanceof EnforceError && blockedBeforeExecutionErrors.has(err)) {
+      throw ranThenFailedCopy(err);
+    }
     throw err;
   }
 }
