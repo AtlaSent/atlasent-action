@@ -7477,6 +7477,7 @@ var require_dist = __commonJS({
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.resolveFunctionRegion = exports2.parseFunctionRegion = exports2.functionRegionHeaders = exports2.HOSTED_RUNTIME_HOSTS = exports2.FunctionRegionConfigError = exports2.FUNCTION_REGION_HEADER = exports2.FUNCTION_REGION_ENV = exports2.DEFAULT_FUNCTION_REGION = exports2.CLOUD_LOCUS_CONTEXT_KEYS = exports2.EnforceError = void 0;
+    exports2.isBlockedBeforeExecution = isBlockedBeforeExecution;
     exports2.evaluate = evaluate2;
     exports2.denyReasonText = denyReasonText;
     exports2.verify = verify2;
@@ -7494,6 +7495,10 @@ var require_dist = __commonJS({
         ...(0, functionRegion_1.functionRegionHeaders)(url, config.functionRegion)
       };
     }
+    var blockedBeforeExecutionErrors = /* @__PURE__ */ new WeakSet();
+    function isBlockedBeforeExecution(err) {
+      return err instanceof EnforceError2 && blockedBeforeExecutionErrors.has(err);
+    }
     var EnforceError2 = class extends Error {
       phase;
       decision;
@@ -7510,6 +7515,13 @@ var require_dist = __commonJS({
         this.outcome = details?.outcome;
         this.verifyErrorCode = details?.verifyErrorCode;
         this.mismatchFields = details?.mismatchFields;
+      }
+      /**
+       * True only when `enforce()` raised this error at its gate before the
+       * protected callback ran. See {@link isBlockedBeforeExecution}.
+       */
+      get blockedBeforeExecution() {
+        return blockedBeforeExecutionErrors.has(this);
       }
     };
     exports2.EnforceError = EnforceError2;
@@ -7814,11 +7826,25 @@ var require_dist = __commonJS({
       return r;
     }
     async function enforce(config, fn) {
-      const decision = await evaluate2(config);
-      verify2(decision);
-      const vp = await verifyPermit2(config, decision);
-      const result = await fn();
-      return { result, decision, verifyOutcome: vp.outcome };
+      let decision;
+      let vp;
+      try {
+        decision = await evaluate2(config);
+        verify2(decision);
+        vp = await verifyPermit2(config, decision);
+      } catch (err) {
+        if (err instanceof EnforceError2)
+          blockedBeforeExecutionErrors.add(err);
+        throw err;
+      }
+      try {
+        const result = await fn();
+        return { result, decision, verifyOutcome: vp.outcome };
+      } catch (err) {
+        if (err instanceof EnforceError2)
+          blockedBeforeExecutionErrors.delete(err);
+        throw err;
+      }
     }
     function mapDecision(raw) {
       return {
