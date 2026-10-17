@@ -4,6 +4,38 @@ All notable changes to `atlasent-action` are documented here.
 
 ## [Unreleased]
 
+### Added: execution admission and effect establishment modes
+
+Two new modes complete the GitHub Gate journey without hand-written API calls
+([docs/github-gate.md](docs/github-gate.md)):
+
+- `admit-operation: "true"` calls `v1-consequential-operations/consume-and-admit`
+  (ADR-075): verify without consuming, then consume the permit and admit a
+  durable operation + attempt in one transaction, committing this run as
+  `github_actions_run:<run_id>`. Outputs `verified`/`admitted`,
+  `operation-id`, `attempt-id`, `operation-key`, `permit-hash` and
+  `admission-outcome-unknown`. The operation key is derived from a digest of
+  the permit, so a retried step cannot admit twice.
+- `establish-effect: "true"` locates the deployment this run's deploy job
+  created (matched on the job id in the status URL) and calls
+  `/establish-effect` (ADR-076); the runtime reads GitHub and decides. A failed
+  deploy is recorded as `failure`, a cancelled or skipped one as `unknown`.
+- Evaluate accepts `change-brief-id` + `canonical-plan-digest` (both or
+  neither, digest format checked) and sends them top-level, via a new
+  `changeBrief` field in `@atlasent/enforce`. The change-brief mode now also
+  outputs the exact `change-brief-plan-base-sha` / `-head-sha` / `-ref` the
+  digest covers.
+- So that a brief can actually be bound, `change-brief: "true"` for the four
+  mandatory change-control actions now creates the brief as the verified
+  workload actor (the actor evaluate uses) with the same
+  `execution_change_plan` evaluate sends, and evaluate sends `target-id` as
+  `resource_id` when a brief is bound. v1-evaluate otherwise denies the binding
+  with `CHANGE_BRIEF_MISMATCH`. Binding a brief requires `target-id`.
+
+Behaviour change: a `change-brief` step for `production.deploy` (and the other
+three change-control actions) now needs `id-token: write`, because it mints the
+workload actor. Every other input, output and default is unchanged.
+
 ### Added: the workload identity is re-presented at verify-permit
 
 `@atlasent/enforce`'s `verifyPermit` and `reverifyPermit` now send the

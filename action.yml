@@ -425,6 +425,47 @@ inputs:
       credential is supplied. Falls back to `env: GITHUB_TOKEN` when unset.
     required: false
     default: ''
+  change-brief-id:
+    description: 'Single-eval path only. Binds this evaluation to an existing Change Brief: pass the change-brief-id output of an earlier `change-brief: "true"` step. Must be supplied together with canonical-plan-digest. Required downstream by `establish-effect: "true"`, which can only establish a deploy effect for an evaluation that bound a brief.'
+    required: false
+  canonical-plan-digest:
+    description: 'Single-eval path only. The change-brief-canonical-plan-digest output of the same change-brief step (sha256:<64 hex>). Supplied together with change-brief-id, or the step fails closed.'
+    required: false
+  admit-operation:
+    description: |
+      Set "true" for the EXECUTION ADMISSION boundary (ADR-075), the stronger alternative to `verify-permit: "true"`. Verifies the permit WITHOUT consuming it, then consumes it AND admits a durable operation + attempt in ONE transaction (POST v1-consequential-operations/consume-and-admit), committing THIS workflow run as the admitted run. Needs permit-token, action, target-id, environment and, for production.deploy, the gate's execution-hash. Run it in a job BEFORE the deploy job (the deploy job declares `environment:` and `needs:` this one), and gate the deploy on this step's `verified == 'true'`. Any refusal fails closed and leaves the permit unspent; an unknown outcome (admission-outcome-unknown) must be looked up by operation-key before retrying. API key scopes: verify:execute + consequential_operations:write.
+    required: false
+    default: 'false'
+  establish-effect:
+    description: |
+      Set "true" AFTER the deploy job to have the AtlaSent runtime establish the deploy effect from GitHub's own records (ADR-076, POST v1-consequential-operations/establish-effect). This step only locates this run's deployment for the deploy job; the runtime reads the run, deployment and status through the org's GitHub App and decides. Success is never self-reported: a failed or cancelled deploy job is recorded as failure/unknown. Requires the evaluation to have bound a Change Brief (change-brief-id + canonical-plan-digest), operation-id + attempt-id from the admit-operation step, and GITHUB_TOKEN with actions:read + deployments:read. Fails the step unless the effect is established.
+    required: false
+    default: 'false'
+  operation-id:
+    description: 'establish-effect only. The operation-id output of the admit-operation step.'
+    required: false
+  attempt-id:
+    description: 'establish-effect only. The attempt-id output of the admit-operation step.'
+    required: false
+  deploy-job:
+    description: 'establish-effect only. Name of the deploy job as GitHub reports it (its `name:`, else its id). Default "deploy".'
+    required: false
+    default: 'deploy'
+  deploy-result:
+    description: 'establish-effect only. `needs.<deploy-job>.result` (success / failure / cancelled / skipped).'
+    required: false
+  deploy-environment:
+    description: 'establish-effect only. The GitHub Environment the deploy job declared.'
+    required: false
+  base-sha:
+    description: 'establish-effect only. Base revision of the authorized change plan: the change-brief step''s change-brief-plan-base-sha output.'
+    required: false
+  head-sha:
+    description: 'establish-effect only. Head revision of the authorized change plan (defaults to GITHUB_SHA). Pass the change-brief step''s change-brief-plan-head-sha.'
+    required: false
+  plan-ref:
+    description: 'establish-effect only. The ref of the authorized change plan: the change-brief step''s change-brief-plan-ref output. The runtime recomputes the plan digest from base/head/ref, so it must match what the brief digested.'
+    required: false
 outputs:
   solo-attestation-id:
     description: 'UUID of the recorded solo_operator_attestations row. Set only by solo-operator-attest mode. Empty on failure (fail-closed — no partial attestation is ever recorded).'
@@ -474,6 +515,12 @@ outputs:
     description: 'Whether the GitHub comparison and check-run reads were complete or partial. An empty fact set from a failed read is always partial, never presented as an observed zero. Change-brief mode only.'
   change-brief-blocking-evidence-count:
     description: 'Count of blocking evidence gaps identified by v1-change-brief. Advisory routing signal only; execution still requires evaluate/permit. Change-brief mode only.'
+  change-brief-plan-base-sha:
+    description: 'Change-brief mode only. Base revision the canonical plan digest covers; pass to establish-effect as base-sha.'
+  change-brief-plan-head-sha:
+    description: 'Change-brief mode only. Head revision the canonical plan digest covers; pass to establish-effect as head-sha.'
+  change-brief-plan-ref:
+    description: 'Change-brief mode only. Ref the canonical plan digest covers (empty when none); pass to establish-effect as plan-ref.'
   change-brief-decision-brief:
     description: 'JSON management_decision_brief.v1 projection with business rationale, translated impact, automatic-analysis counts, next actions, exact evidence binding, and an explicit advisory-only authority boundary. Change-brief mode only.'
   financial-governance-advice:
@@ -569,6 +616,24 @@ outputs:
     description: '"true" when the verdict flipped between the original snapshot and the AI rerun (vqp-verify mode only).'
   vqp-audit-id:
     description: 'Audit log entry ID written by v1-verify-vqp for this re-derivation run (vqp-verify mode only).'
+  admitted:
+    description: '"true" only when admit-operation consumed the permit and admitted the operation. Same value as verified on that path.'
+  operation-id:
+    description: 'admit-operation only. Durable operation id; pass to establish-effect.'
+  attempt-id:
+    description: 'admit-operation only. Admitted attempt id; pass to establish-effect.'
+  operation-key:
+    description: 'admit-operation only. Deterministic key derived from a digest of the permit. Look the operation up by it when admission-outcome-unknown is "true".'
+  permit-hash:
+    description: 'admit-operation only. SHA-256 of the permit token (not the token), for closeout correlation.'
+  admission-outcome-unknown:
+    description: 'admit-operation only. "true" when the admission may have committed with its response lost. The deploy must not run, and the operation must be looked up by operation-key before any retry.'
+  effect-state:
+    description: 'establish-effect only. The operation state the runtime reports ("succeeded" when established).'
+  effect-established:
+    description: 'establish-effect only. "true" only when the runtime established the deploy effect from GitHub records.'
+  deployment-id:
+    description: 'establish-effect only. The GitHub deployment id this run''s deploy job created.'
 runs:
   using: 'node24'
   main: 'dist/index.js'

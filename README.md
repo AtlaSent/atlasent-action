@@ -400,6 +400,24 @@ execution hash from that complete plan. `mode: evaluate-only` exposes that
 binding as `execution-hash`; pass it unchanged to the later verify step while
 independently re-hashing the downloaded bytes against `artifact-digest`.
 
+## Full GitHub Gate journey (hold, approve, admit, deploy, establish)
+
+For a governed production deploy end to end, use the two execution modes
+after the gate:
+
+- `admit-operation: "true"` replaces the boundary `verify-permit` step. It
+  verifies the permit, then consumes it and records a durable operation in one
+  transaction, committing this workflow run. Gate the deploy job on its
+  `verified` output.
+- `establish-effect: "true"` runs after the deploy job. The AtlaSent runtime
+  reads GitHub's run, deployment and status itself and decides whether the
+  authorized change happened. It never reports success on the workflow's word.
+
+Establishment needs the evaluation bound to a Change Brief (`change-brief-id`
++ `canonical-plan-digest` inputs, from a `change-brief: "true"` step). The
+complete workflow, prerequisites and refusal table are in
+[docs/github-gate.md](docs/github-gate.md).
+
 ## Clinical example
 
 The same execution contract can gate a provisioned clinical action:

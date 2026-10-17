@@ -91,6 +91,12 @@ import {
 import { renderPostureStepSummary, runPostureScan } from "./postureScan";
 import { runInsightsEvaluate } from "./insights";
 import { MISSING_API_KEY_HINT } from "./apiKeyHint";
+import {
+  ExecutionAdmissionError,
+  admitExecution,
+  establishDeployEffect,
+  permitTokenHash,
+} from "./executionAdmission";
 
 function getApiKey(): string {
   const apiKey = (process.env["ATLASENT_API_KEY"] ?? "").trim();
@@ -918,6 +924,150 @@ async function runVerifyPermitStep(apiKey: string, apiUrl: string): Promise<void
 }
 
 // ---------------------------------------------------------------------------
+// Execution admission + effect establishment steps (executionAdmission.ts)
+// ---------------------------------------------------------------------------
+
+async function runAdmitOperationStep(apiKey: string, apiUrl: string): Promise<void> {
+  setOutput("verified", "false");
+  setOutput("admitted", "false");
+  const permitToken = getInput("permit-token");
+  const fail = (code: string, message: string): void => {
+    setOutput("verify-error-code", code);
+    setFailed(`Deploy blocked at execution admission: ${message}`);
+  };
+  if (!permitToken) {
+    // No permit means the gate refused or was skipped; nothing may run.
+    fail("PERMIT_MISSING", "no permit-token was supplied (the gate issued none).");
+    return;
+  }
+  maskValue(permitToken);
+  const actionType = normalizeAndValidateProtectedAction(getInput("action", true));
+  const targetId = getInput("target-id");
+  if (!targetId) {
+    fail("MISSING_BINDING", "`target-id` is required: the admitted operation is bound to it.");
+    return;
+  }
+  const gh = getGitHubContext();
+  const environment = resolveEnvironment(getInput("environment"), gh.ref, apiKey);
+  const runtimeExecutionHash = getInput("execution-hash") || undefined;
+  if (MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType) && !runtimeExecutionHash) {
+    fail(
+      "MISSING_BINDING",
+      `"${actionType}" requires the execution-hash output of its evaluate-only gate; the raw artifact-digest is not the runtime's binding.`,
+    );
+    return;
+  }
+  const payloadHash = MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType)
+    ? runtimeExecutionHash
+    : normalizeExecutionPayloadHash(getInput("artifact-digest") || undefined);
+
+  let actorResolution: ProtectedActorResolution;
+  try {
+    actorResolution = await resolveProtectedActor({
+      apiKey,
+      apiUrl,
+      actionType,
+      environment,
+      triggeringActor: getInput("actor") || "unknown",
+    });
+  } catch (error) {
+    fail("ACTOR_UNVERIFIED", error instanceof Error ? error.message : String(error));
+    return;
+  }
+
+  try {
+    const admitted = await admitExecution({
+      apiUrl,
+      apiKey,
+      permitToken,
+      actionType,
+      actorId: actorResolution.actorId,
+      targetId,
+      environment,
+      payloadHash: payloadHash ?? "",
+      runId: gh.run_id,
+      ...(actorResolution.workloadIdentity
+        ? { executorActorIdentity: actorResolution.workloadIdentity.assertion }
+        : {}),
+    });
+    setOutput("verified", "true");
+    setOutput("admitted", "true");
+    setOutput("verify-error-code", "");
+    setOutput("operation-id", admitted.operationId);
+    setOutput("attempt-id", admitted.attemptId);
+    setOutput("operation-key", admitted.operationKey);
+    setOutput("permit-hash", permitTokenHash(permitToken));
+    info(
+      `Permit consumed and operation admitted (operation_id=${admitted.operationId}, attempt_id=${admitted.attemptId}) ` +
+        `for run ${gh.run_id}. The deploy may run in a LATER job that declares its environment.`,
+    );
+  } catch (error) {
+    const e = error instanceof ExecutionAdmissionError ? error : null;
+    setOutput("admission-outcome-unknown", e?.outcomeUnknown ? "true" : "false");
+    fail(e?.outcomeUnknown ? "ADMISSION_OUTCOME_UNKNOWN" : "ADMISSION_REFUSED", error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function runEstablishEffectStep(apiKey: string, apiUrl: string): Promise<void> {
+  setOutput("effect-established", "false");
+  const githubToken = process.env.GITHUB_TOKEN;
+  const operationId = getInput("operation-id");
+  const attemptId = getInput("attempt-id");
+  const deployJobResult = getInput("deploy-result");
+  const githubEnvironment = getInput("deploy-environment");
+  const baseSha = getInput("base-sha");
+  const headSha = getInput("head-sha") || process.env.GITHUB_SHA || "";
+  const missing = [
+    ["operation-id", operationId],
+    ["attempt-id", attemptId],
+    ["deploy-result", deployJobResult],
+    ["deploy-environment", githubEnvironment],
+    ["base-sha", baseSha],
+    ["head-sha", headSha],
+    ["GITHUB_TOKEN", githubToken],
+  ].filter(([, v]) => !v).map(([k]) => k);
+  if (missing.length) {
+    setFailed(`AtlaSent effect establishment: missing ${missing.join(", ")}. Nothing was recorded.`);
+    return;
+  }
+  const gh = getGitHubContext();
+  try {
+    const r = await establishDeployEffect({
+      apiUrl,
+      apiKey,
+      githubToken: githubToken as string,
+      repository: gh.repository,
+      runId: gh.run_id,
+      operationId,
+      attemptId,
+      deployJobResult,
+      deployJobName: getInput("deploy-job") || "deploy",
+      githubEnvironment,
+      baseSha,
+      headSha,
+      ref: getInput("plan-ref") || null,
+    });
+    setOutput("effect-state", r.state);
+    setOutput("effect-established", r.established ? "true" : "false");
+    setOutput("deployment-id", r.deploymentId ?? "");
+    if (!r.established) {
+      setFailed(
+        `AtlaSent effect establishment: the deploy effect was NOT established (state=${r.state}` +
+          `${r.reason ? `, reason=${r.reason}` : ""}). Do not report this change as verified.`,
+      );
+      return;
+    }
+    info(`Deploy effect established by the runtime from GitHub's own records (deployment ${r.deploymentId}).`);
+  } catch (error) {
+    setOutput("effect-state", "unknown");
+    setFailed(
+      `AtlaSent effect establishment could not run: ${error instanceof Error ? error.message : String(error)}. ` +
+        "The operation stays open; nothing was recorded as succeeded.",
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Posture Scan step — advisory GitHub security-posture report
 // ---------------------------------------------------------------------------
 //
@@ -1178,6 +1328,46 @@ async function runChangeBriefStep(apiKey: string, apiUrl: string): Promise<void>
       `(${environment}), commit ${gh.sha.slice(0, 8)}`,
   );
 
+  // A brief that a later evaluate will bind (change-brief-id input) must
+  // describe that evaluation exactly: v1-evaluate refuses CHANGE_BRIEF_MISMATCH
+  // unless the brief's actor, target and (for the mandatory change-control
+  // actions) execution_change_plan equal the request's. For those actions the
+  // evaluating actor is the verified workload principal and the plan is
+  // derived from it, so the brief is created with the same values. A mint
+  // failure here fails closed, exactly as it would at evaluate.
+  const normalizedAction = normalizeProtectedAction(actionType).canonical;
+  let briefActorId = `github:${actor}`;
+  let executionChangePlan: { operation: string; revision?: string; artifact_ref?: string } | undefined;
+  if (MANDATORY_CHANGE_CONTROL_ACTIONS.has(normalizedAction)) {
+    let resolution: ProtectedActorResolution;
+    try {
+      resolution = await resolveProtectedActor({
+        apiKey,
+        apiUrl,
+        actionType: normalizedAction,
+        environment,
+        triggeringActor: actor,
+      });
+    } catch (error) {
+      setFailed(
+        `AtlaSent Change Brief: could not mint the verified workload actor the brief must name: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return;
+    }
+    briefActorId = resolution.actorId;
+    const revision = resolution.workloadIdentity?.source.sha ?? "";
+    const briefArtifactDigest = getInput("artifact-digest") || undefined;
+    if (revision) {
+      executionChangePlan = {
+        operation: normalizedAction.split(".").pop() || normalizedAction,
+        revision,
+        ...(briefArtifactDigest ? { artifact_ref: briefArtifactDigest } : {}),
+      };
+    }
+  }
+
   const clearOutputs = (): void => {
     setOutput("change-brief-id", "");
     setOutput("change-brief-recommendation", "");
@@ -1200,8 +1390,9 @@ async function runChangeBriefStep(apiKey: string, apiUrl: string): Promise<void>
       targetSystem,
       targetId,
       environment,
-      actorId: `github:${actor}`,
+      actorId: briefActorId,
       changeRequest,
+      ...(executionChangePlan ? { executionChangePlan } : {}),
       githubToken: process.env["GITHUB_TOKEN"],
       githubApiBase: process.env["GITHUB_API_URL"],
       repository: gh.repository,
@@ -1236,6 +1427,12 @@ async function runChangeBriefStep(apiKey: string, apiUrl: string): Promise<void>
   setOutput("change-brief-classification", brief.classification.value);
   setOutput("change-brief-material-differences-count", String(brief.material_differences.length));
   setOutput("change-brief-canonical-plan-digest", canonicalPlanDigest);
+  // The exact plan the digest covers, for a later `establish-effect` step
+  // (which must present the same base/head/ref for the runtime to recompute
+  // the same digest).
+  setOutput("change-brief-plan-base-sha", result.facts.base_sha);
+  setOutput("change-brief-plan-head-sha", result.facts.head_sha);
+  setOutput("change-brief-plan-ref", result.facts.ref ?? "");
   setOutput("change-brief-decision-readiness", managementBrief.readiness);
   setOutput("change-brief-source-collection", collection.status);
   setOutput(
@@ -1768,6 +1965,25 @@ export async function run(): Promise<void> {
     return;
   }
 
+  // ── Execution admission (ADR-075) ─────────────────────────────────────────
+  //
+  // The execution boundary in its strongest form: verify the permit without
+  // consuming it, then consume it AND admit a durable operation in one
+  // transaction, committing THIS run. Gate the deploy job on `verified`.
+  if (getInput("admit-operation").toLowerCase() === "true") {
+    await runAdmitOperationStep(apiKey, apiUrl);
+    return;
+  }
+
+  // ── Effect establishment (ADR-076) ───────────────────────────────────────
+  //
+  // After the deploy job: the runtime reads GitHub's own records and decides
+  // whether the authorized change happened. Never self-reports success.
+  if (getInput("establish-effect").toLowerCase() === "true") {
+    await runEstablishEffectStep(apiKey, apiUrl);
+    return;
+  }
+
   // ── Verify-permit path (execution boundary) ─────────────────────────────────
   //
   // Re-verify an already-issued permit immediately before the protected step,
@@ -2207,12 +2423,46 @@ export async function run(): Promise<void> {
   const soloOperatorContext =
     (getInput("solo-operator-context") || "false").trim().toLowerCase() === "true";
 
+  // Optional Change Brief binding (outputs of an earlier `change-brief: 'true'`
+  // step). Both or neither: a half-bound brief is refused rather than sent,
+  // and a malformed digest never reaches the runtime. Required downstream by
+  // `establish-effect: 'true'` — see executionAdmission.ts.
+  const briefIdInput = getInput("change-brief-id").trim();
+  const briefDigestInput = getInput("canonical-plan-digest").trim();
+  if ((briefIdInput === "") !== (briefDigestInput === "") ||
+      (briefDigestInput !== "" && !/^sha256:[0-9a-f]{64}$/.test(briefDigestInput))) {
+    setOutput("decision", "deny");
+    setOutput("verified", "false");
+    setOutput("permit-issued", "false");
+    setOutput("verify-outcome", "invalid");
+    setOutput("verify-error-code", "MISSING_BINDING");
+    setFailed(
+      "AtlaSent Gate: `change-brief-id` and `canonical-plan-digest` must be supplied together, " +
+        "the digest as sha256:<64 lowercase hex> (the change-brief step's outputs). Deploy blocked (fail-closed).",
+    );
+    return;
+  }
+  const changeBriefBinding = briefIdInput
+    ? { id: briefIdInput, canonicalPlanDigest: briefDigestInput }
+    : undefined;
+  // v1-evaluate compares the brief's target with the request's resource_id.
+  if (changeBriefBinding && !targetId) {
+    setOutput("decision", "deny");
+    setOutput("verified", "false");
+    setOutput("permit-issued", "false");
+    setOutput("verify-outcome", "invalid");
+    setOutput("verify-error-code", "MISSING_BINDING");
+    setFailed("AtlaSent Gate: binding a Change Brief requires `target-id` (the brief's target). Deploy blocked (fail-closed).");
+    return;
+  }
+
   const config: EnforceConfig = {
     apiKey,
     apiUrl,
     action: actionType,
     actor: actorId,
     actorIdentity: actorResolution.workloadIdentity?.assertion,
+    ...(changeBriefBinding ? { changeBrief: changeBriefBinding, resourceId: targetId } : {}),
     ...(supplyChainAssertion ? { assertions: [supplyChainAssertion], resourceId: targetId } : {}),
     environment,
     targetId,

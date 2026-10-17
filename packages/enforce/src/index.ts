@@ -113,6 +113,20 @@ export interface EnforceConfig extends FunctionRegionOption {
     artifact_ref?: string;
   };
   /**
+   * Binds the evaluation to an existing Change Brief (created by v1-change-brief,
+   * e.g. this action's `change-brief: 'true'` mode). Sent as the top-level
+   * `change_brief_id` + `canonical_plan_digest` evaluate fields. The runtime
+   * persists both on the evaluation; ADR-076 effect establishment
+   * (v1-consequential-operations/establish-effect) requires them, so an
+   * evaluation without a bound brief can never have its GitHub deploy effect
+   * established. Never buried in context.
+   */
+  changeBrief?: {
+    id: string;
+    /** `sha256:<64 hex>` over the runtime's git-sha plan projection. */
+    canonicalPlanDigest: string;
+  };
+  /**
    * Typed solo-operator compensating-control evidence for action types
    * OUTSIDE the four mandatory-change-control types `changePlan` covers
    * (production.deploy, infrastructure.change, production.rollback,
@@ -331,6 +345,10 @@ export async function evaluate(config: EnforceConfig): Promise<Decision> {
   const snap = config.state_snapshot ?? contextSnapshot;
   if (snap != null) payload["state_snapshot"] = snap;
   if (config.changePlan != null) payload["change_plan"] = config.changePlan;
+  if (config.changeBrief != null) {
+    payload["change_brief_id"] = config.changeBrief.id;
+    payload["canonical_plan_digest"] = config.changeBrief.canonicalPlanDigest;
+  }
   if (config.evidenceProfile != null) payload["evidence_profile"] = config.evidenceProfile;
   if (config.quorum != null) payload["quorum"] = config.quorum;
   if (config.approval != null) payload["approval"] = config.approval;

@@ -108,7 +108,7 @@ var require_functionRegion = __commonJS({
     exports2.FunctionRegionConfigError = exports2.SUPPORTED_FUNCTION_REGIONS = exports2.HOSTED_RUNTIME_HOSTS = exports2.DEFAULT_FUNCTION_REGION = exports2.FUNCTION_REGION_ENV = exports2.FUNCTION_REGION_HEADER = void 0;
     exports2.parseFunctionRegion = parseFunctionRegion2;
     exports2.resolveFunctionRegion = resolveFunctionRegion;
-    exports2.functionRegionHeaders = functionRegionHeaders12;
+    exports2.functionRegionHeaders = functionRegionHeaders13;
     exports2.FUNCTION_REGION_HEADER = "x-region";
     exports2.FUNCTION_REGION_ENV = "ATLASENT_FUNCTION_REGION";
     exports2.DEFAULT_FUNCTION_REGION = "us-west-1";
@@ -165,7 +165,7 @@ var require_functionRegion = __commonJS({
         return parseFunctionRegion2(fromEnv);
       return isHostedRuntime(url) ? exports2.DEFAULT_FUNCTION_REGION : null;
     }
-    function functionRegionHeaders12(url, explicit, env = process.env) {
+    function functionRegionHeaders13(url, explicit, env = process.env) {
       const region = resolveFunctionRegion(url, explicit, env);
       return region ? { [exports2.FUNCTION_REGION_HEADER]: region } : {};
     }
@@ -638,8 +638,8 @@ __export(src_exports, {
   run: () => run
 });
 module.exports = __toCommonJS(src_exports);
-var import_enforce14 = __toESM(require_dist());
 var import_enforce15 = __toESM(require_dist());
+var import_enforce16 = __toESM(require_dist());
 
 // src/gate.ts
 var GateInfraError = class extends Error {
@@ -2651,7 +2651,8 @@ async function runChangeBrief(opts) {
         actor_id: opts.actorId,
         change_request: opts.changeRequest,
         plan_format: "git-sha",
-        github_change_plan: facts
+        github_change_plan: facts,
+        ...opts.executionChangePlan ? { execution_change_plan: opts.executionChangePlan } : {}
       })
     });
   } catch (err) {
@@ -3666,6 +3667,237 @@ async function runInsightsEvaluate(cfg, log = console) {
   }
 }
 
+// src/executionAdmission.ts
+var import_crypto = require("crypto");
+var import_enforce14 = __toESM(require_dist());
+var GITHUB_API_DEFAULT2 = "https://api.github.com";
+var PAYLOAD_HASH_RE = /^[0-9a-f]{64}$/;
+var ExecutionAdmissionError = class extends Error {
+  constructor(message, httpStatus, outcomeUnknown = false) {
+    super(message);
+    this.httpStatus = httpStatus;
+    this.outcomeUnknown = outcomeUnknown;
+    this.name = "ExecutionAdmissionError";
+  }
+};
+function admissionOperationKey(permitToken) {
+  return `gha-permit:${(0, import_crypto.createHash)("sha256").update(permitToken).digest("hex").slice(0, 40)}`;
+}
+function permitTokenHash(permitToken) {
+  return (0, import_crypto.createHash)("sha256").update(permitToken).digest("hex");
+}
+function boundedDetail(text) {
+  try {
+    const parsed = JSON.parse(text);
+    const code = parsed["error_code"] ?? parsed["error"];
+    const message = parsed["message"] ?? parsed["reason"];
+    const parts = [code, message].filter((v) => typeof v === "string" && v.trim());
+    if (parts.length)
+      return parts.join(": ").slice(0, 400);
+  } catch {
+  }
+  return text.trim().slice(0, 400);
+}
+async function admitExecution(args, deps = {}) {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const apiUrl = args.apiUrl.replace(/\/+$/, "");
+  if (!PAYLOAD_HASH_RE.test(args.payloadHash)) {
+    throw new ExecutionAdmissionError(
+      "admission needs the permit's payload binding as 64-char lowercase hex (the execution-hash output of the gate, or a sha256 artifact-digest); none was supplied",
+      null
+    );
+  }
+  if (!/^[0-9]+$/.test(args.runId)) {
+    throw new ExecutionAdmissionError(`GITHUB_RUN_ID "${args.runId}" is not a run id`, null);
+  }
+  const operationKey = admissionOperationKey(args.permitToken);
+  const body = {
+    permit_token: args.permitToken,
+    action_type: args.actionType,
+    actor_id: args.actorId,
+    target_id: args.targetId,
+    environment: args.environment,
+    payload_hash: args.payloadHash,
+    operation_key: operationKey,
+    provider: "github_actions",
+    provider_idempotency_key: `github_actions_run:${args.runId}`,
+    ...args.executorActorIdentity ? { executor_actor_identity: args.executorActorIdentity } : {}
+  };
+  let response;
+  try {
+    response = await fetchImpl(`${apiUrl}/v1-consequential-operations/consume-and-admit`, {
+      method: "POST",
+      headers: {
+        ...(0, import_enforce14.functionRegionHeaders)(apiUrl),
+        Authorization: `Bearer ${args.apiKey}`,
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body: JSON.stringify(body)
+    });
+  } catch (error) {
+    throw new ExecutionAdmissionError(
+      `admission request failed in transit (${error instanceof Error ? error.message : String(error)}); the outcome is unknown \u2014 look up operation_key=${operationKey} before minting a fresh permit`,
+      null,
+      true
+    );
+  }
+  const text = await response.text();
+  if (!response.ok) {
+    const unknown = response.status === 503 && /admission_outcome_unknown/.test(text);
+    throw new ExecutionAdmissionError(
+      `admission refused (HTTP ${response.status}): ${boundedDetail(text)}` + (unknown ? ` \u2014 the outcome is unknown; look up operation_key=${operationKey} before any retry` : ""),
+      response.status,
+      unknown
+    );
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new ExecutionAdmissionError("admission returned a non-JSON success body", response.status, true);
+  }
+  const operationId = typeof parsed["operation_id"] === "string" ? parsed["operation_id"] : "";
+  const attemptId = typeof parsed["attempt_id"] === "string" ? parsed["attempt_id"] : "";
+  if (!operationId || !attemptId) {
+    throw new ExecutionAdmissionError(
+      "admission returned no operation_id/attempt_id; the deploy must not run",
+      response.status,
+      true
+    );
+  }
+  return {
+    operationId,
+    attemptId,
+    operationKey,
+    decisionId: typeof parsed["decision_id"] === "string" ? parsed["decision_id"] : null,
+    auditId: typeof parsed["audit_id"] === "string" ? parsed["audit_id"] : null
+  };
+}
+async function githubJson(fetchImpl, url, token) {
+  const res = await fetchImpl(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28"
+    }
+  });
+  if (!res.ok) {
+    throw new ExecutionAdmissionError(`GitHub API ${res.status} for ${url.replace(/\?.*$/, "")}`, res.status);
+  }
+  return res.json();
+}
+async function findDeploymentForJob(args, deps = {}) {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const api = `${(args.githubApiUrl ?? GITHUB_API_DEFAULT2).replace(/\/+$/, "")}/repos/${args.repository}`;
+  const jobs = await githubJson(fetchImpl, `${api}/actions/runs/${args.runId}/jobs?per_page=100`, args.githubToken);
+  const matching = (jobs.jobs ?? []).filter((j) => j.name === args.deployJobName && typeof j.id === "number");
+  if (matching.length !== 1) {
+    throw new ExecutionAdmissionError(
+      `expected exactly one job named "${args.deployJobName}" in run ${args.runId}, found ${matching.length}`,
+      null
+    );
+  }
+  const jobUrlFragment = `/actions/runs/${args.runId}/job/${matching[0].id}`;
+  const deployments = await githubJson(
+    fetchImpl,
+    `${api}/deployments?sha=${encodeURIComponent(args.headSha)}&environment=${encodeURIComponent(args.githubEnvironment)}&per_page=30`,
+    args.githubToken
+  );
+  const found = [];
+  for (const d of Array.isArray(deployments) ? deployments : []) {
+    if (typeof d.id !== "number")
+      continue;
+    const statuses = await githubJson(fetchImpl, `${api}/deployments/${d.id}/statuses?per_page=100`, args.githubToken);
+    if ((Array.isArray(statuses) ? statuses : []).some((s) => (s.log_url ?? s.target_url ?? "").includes(jobUrlFragment))) {
+      found.push(String(d.id));
+    }
+  }
+  if (found.length !== 1) {
+    throw new ExecutionAdmissionError(
+      `expected exactly one "${args.githubEnvironment}" deployment of ${args.headSha} naming run ${args.runId} job ${matching[0].id}, found ${found.length}`,
+      null
+    );
+  }
+  return found[0];
+}
+async function postRuntime(fetchImpl, apiUrl, apiKey, path4, body) {
+  const base = apiUrl.replace(/\/+$/, "");
+  const res = await fetchImpl(`${base}/v1-consequential-operations/${path4}`, {
+    method: "POST",
+    headers: {
+      ...(0, import_enforce14.functionRegionHeaders)(base),
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      Accept: "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  const text = await res.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = null;
+  }
+  return { status: res.status, json };
+}
+var RETRYABLE_REASON = /^(deployment_in_progress|workflow_run_not_completed)/;
+async function establishDeployEffect(args, deps = {}) {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const sleep = args.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  if (args.deployJobResult !== "success") {
+    const outcome = args.deployJobResult === "failure" ? "failure" : "unknown";
+    const r = await postRuntime(fetchImpl, args.apiUrl, args.apiKey, "record-attempt", {
+      operation_id: args.operationId,
+      attempt_id: args.attemptId,
+      outcome,
+      observation: { source: "atlasent-action", job: args.deployJobName, job_result: args.deployJobResult }
+    });
+    return {
+      state: typeof r.json?.["state"] === "string" ? r.json["state"] : `record_attempt_http_${r.status}`,
+      established: false,
+      deploymentId: null,
+      reason: `deploy job result: ${args.deployJobResult}`,
+      response: r.json
+    };
+  }
+  const deploymentId = await findDeploymentForJob(args, deps);
+  const body = {
+    operation_id: args.operationId,
+    attempt_id: args.attemptId,
+    deployment_id: deploymentId,
+    run_id: args.runId,
+    verified_plan: {
+      repository: args.repository,
+      base_sha: args.baseSha,
+      head_sha: args.headSha,
+      ref: args.ref ?? null
+    }
+  };
+  const delays = args.retryDelaysMs ?? [1e4, 1e4, 1e4, 1e4, 1e4];
+  let last = { status: 0, json: null };
+  for (let i = 0; i <= delays.length; i++) {
+    last = await postRuntime(fetchImpl, args.apiUrl, args.apiKey, "establish-effect", body);
+    if (last.status === 200)
+      break;
+    const ee2 = last.json?.["effect_establishment"];
+    const reason = typeof ee2?.["reason"] === "string" ? ee2["reason"] : "";
+    if (!RETRYABLE_REASON.test(reason) || i === delays.length)
+      break;
+    await sleep(delays[i]);
+  }
+  const state = typeof last.json?.["state"] === "string" ? last.json["state"] : "";
+  const ee = last.json?.["effect_establishment"];
+  return {
+    state: state || `establish_http_${last.status}`,
+    established: last.status === 200 && state === "succeeded",
+    deploymentId,
+    reason: typeof ee?.["reason"] === "string" ? ee["reason"] : last.json ? boundedDetail(JSON.stringify(last.json)) : null,
+    response: last.json
+  };
+}
+
 // src/index.ts
 function getApiKey() {
   const apiKey = (process.env["ATLASENT_API_KEY"] ?? "").trim();
@@ -4153,7 +4385,7 @@ async function runVerifyPermitStep(apiKey, apiUrl) {
     ...boundaryContext ? { context: boundaryContext } : {},
     // Boundary re-verify must re-present every binding it was given, or fail
     // closed (MISSING_BINDING) — never a silently-unbound boundary verify.
-    requiredBindings: (0, import_enforce14.requiredBindingsFor)({
+    requiredBindings: (0, import_enforce15.requiredBindingsFor)({
       environment,
       targetId,
       executionPayloadHash: verificationPayloadHash
@@ -4163,7 +4395,7 @@ async function runVerifyPermitStep(apiKey, apiUrl) {
     `AtlaSent boundary re-verification: "${actionType}" for "${actorId}" in ${environment}` + (artifactDigest ? ` (artifact=${artifactDigest})` : "")
   );
   try {
-    const r = await (0, import_enforce14.reverifyPermit)(config, permitToken);
+    const r = await (0, import_enforce15.reverifyPermit)(config, permitToken);
     setOutput("decision", "allow");
     setOutput("verified", "true");
     setOutput("verify-outcome", r.outcome ?? "verified");
@@ -4177,7 +4409,7 @@ async function runVerifyPermitStep(apiKey, apiUrl) {
   } catch (err) {
     setOutput("decision", "deny");
     setOutput("verified", "false");
-    if (err instanceof import_enforce14.EnforceError) {
+    if (err instanceof import_enforce15.EnforceError) {
       setOutput("verify-outcome", err.outcome ?? "invalid");
       setOutput("verify-error-code", err.verifyErrorCode ?? "");
       setFailed(
@@ -4189,6 +4421,134 @@ async function runVerifyPermitStep(apiKey, apiUrl) {
     setOutput("verify-error-code", "");
     setFailed(
       `Deploy blocked at execution boundary: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+async function runAdmitOperationStep(apiKey, apiUrl) {
+  setOutput("verified", "false");
+  setOutput("admitted", "false");
+  const permitToken = getInput("permit-token");
+  const fail = (code, message) => {
+    setOutput("verify-error-code", code);
+    setFailed(`Deploy blocked at execution admission: ${message}`);
+  };
+  if (!permitToken) {
+    fail("PERMIT_MISSING", "no permit-token was supplied (the gate issued none).");
+    return;
+  }
+  maskValue(permitToken);
+  const actionType = normalizeAndValidateProtectedAction(getInput("action", true));
+  const targetId = getInput("target-id");
+  if (!targetId) {
+    fail("MISSING_BINDING", "`target-id` is required: the admitted operation is bound to it.");
+    return;
+  }
+  const gh = getGitHubContext();
+  const environment = resolveEnvironment(getInput("environment"), gh.ref, apiKey);
+  const runtimeExecutionHash = getInput("execution-hash") || void 0;
+  if (MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType) && !runtimeExecutionHash) {
+    fail(
+      "MISSING_BINDING",
+      `"${actionType}" requires the execution-hash output of its evaluate-only gate; the raw artifact-digest is not the runtime's binding.`
+    );
+    return;
+  }
+  const payloadHash = MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType) ? runtimeExecutionHash : normalizeExecutionPayloadHash(getInput("artifact-digest") || void 0);
+  let actorResolution;
+  try {
+    actorResolution = await resolveProtectedActor({
+      apiKey,
+      apiUrl,
+      actionType,
+      environment,
+      triggeringActor: getInput("actor") || "unknown"
+    });
+  } catch (error) {
+    fail("ACTOR_UNVERIFIED", error instanceof Error ? error.message : String(error));
+    return;
+  }
+  try {
+    const admitted = await admitExecution({
+      apiUrl,
+      apiKey,
+      permitToken,
+      actionType,
+      actorId: actorResolution.actorId,
+      targetId,
+      environment,
+      payloadHash: payloadHash ?? "",
+      runId: gh.run_id,
+      ...actorResolution.workloadIdentity ? { executorActorIdentity: actorResolution.workloadIdentity.assertion } : {}
+    });
+    setOutput("verified", "true");
+    setOutput("admitted", "true");
+    setOutput("verify-error-code", "");
+    setOutput("operation-id", admitted.operationId);
+    setOutput("attempt-id", admitted.attemptId);
+    setOutput("operation-key", admitted.operationKey);
+    setOutput("permit-hash", permitTokenHash(permitToken));
+    info(
+      `Permit consumed and operation admitted (operation_id=${admitted.operationId}, attempt_id=${admitted.attemptId}) for run ${gh.run_id}. The deploy may run in a LATER job that declares its environment.`
+    );
+  } catch (error) {
+    const e = error instanceof ExecutionAdmissionError ? error : null;
+    setOutput("admission-outcome-unknown", e?.outcomeUnknown ? "true" : "false");
+    fail(e?.outcomeUnknown ? "ADMISSION_OUTCOME_UNKNOWN" : "ADMISSION_REFUSED", error instanceof Error ? error.message : String(error));
+  }
+}
+async function runEstablishEffectStep(apiKey, apiUrl) {
+  setOutput("effect-established", "false");
+  const githubToken = process.env.GITHUB_TOKEN;
+  const operationId = getInput("operation-id");
+  const attemptId = getInput("attempt-id");
+  const deployJobResult = getInput("deploy-result");
+  const githubEnvironment = getInput("deploy-environment");
+  const baseSha = getInput("base-sha");
+  const headSha = getInput("head-sha") || process.env.GITHUB_SHA || "";
+  const missing = [
+    ["operation-id", operationId],
+    ["attempt-id", attemptId],
+    ["deploy-result", deployJobResult],
+    ["deploy-environment", githubEnvironment],
+    ["base-sha", baseSha],
+    ["head-sha", headSha],
+    ["GITHUB_TOKEN", githubToken]
+  ].filter(([, v]) => !v).map(([k]) => k);
+  if (missing.length) {
+    setFailed(`AtlaSent effect establishment: missing ${missing.join(", ")}. Nothing was recorded.`);
+    return;
+  }
+  const gh = getGitHubContext();
+  try {
+    const r = await establishDeployEffect({
+      apiUrl,
+      apiKey,
+      githubToken,
+      repository: gh.repository,
+      runId: gh.run_id,
+      operationId,
+      attemptId,
+      deployJobResult,
+      deployJobName: getInput("deploy-job") || "deploy",
+      githubEnvironment,
+      baseSha,
+      headSha,
+      ref: getInput("plan-ref") || null
+    });
+    setOutput("effect-state", r.state);
+    setOutput("effect-established", r.established ? "true" : "false");
+    setOutput("deployment-id", r.deploymentId ?? "");
+    if (!r.established) {
+      setFailed(
+        `AtlaSent effect establishment: the deploy effect was NOT established (state=${r.state}${r.reason ? `, reason=${r.reason}` : ""}). Do not report this change as verified.`
+      );
+      return;
+    }
+    info(`Deploy effect established by the runtime from GitHub's own records (deployment ${r.deploymentId}).`);
+  } catch (error) {
+    setOutput("effect-state", "unknown");
+    setFailed(
+      `AtlaSent effect establishment could not run: ${error instanceof Error ? error.message : String(error)}. The operation stays open; nothing was recorded as succeeded.`
     );
   }
 }
@@ -4388,6 +4748,36 @@ async function runChangeBriefStep(apiKey, apiUrl) {
   info(
     `AtlaSent Change Brief: preparing "${actionType}" for ${targetSystem}/${targetId} (${environment}), commit ${gh.sha.slice(0, 8)}`
   );
+  const normalizedAction = normalizeProtectedAction(actionType).canonical;
+  let briefActorId = `github:${actor}`;
+  let executionChangePlan;
+  if (MANDATORY_CHANGE_CONTROL_ACTIONS.has(normalizedAction)) {
+    let resolution;
+    try {
+      resolution = await resolveProtectedActor({
+        apiKey,
+        apiUrl,
+        actionType: normalizedAction,
+        environment,
+        triggeringActor: actor
+      });
+    } catch (error) {
+      setFailed(
+        `AtlaSent Change Brief: could not mint the verified workload actor the brief must name: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return;
+    }
+    briefActorId = resolution.actorId;
+    const revision = resolution.workloadIdentity?.source.sha ?? "";
+    const briefArtifactDigest = getInput("artifact-digest") || void 0;
+    if (revision) {
+      executionChangePlan = {
+        operation: normalizedAction.split(".").pop() || normalizedAction,
+        revision,
+        ...briefArtifactDigest ? { artifact_ref: briefArtifactDigest } : {}
+      };
+    }
+  }
   const clearOutputs = () => {
     setOutput("change-brief-id", "");
     setOutput("change-brief-recommendation", "");
@@ -4409,8 +4799,9 @@ async function runChangeBriefStep(apiKey, apiUrl) {
       targetSystem,
       targetId,
       environment,
-      actorId: `github:${actor}`,
+      actorId: briefActorId,
       changeRequest,
+      ...executionChangePlan ? { executionChangePlan } : {},
       githubToken: process.env["GITHUB_TOKEN"],
       githubApiBase: process.env["GITHUB_API_URL"],
       repository: gh.repository,
@@ -4442,6 +4833,9 @@ async function runChangeBriefStep(apiKey, apiUrl) {
   setOutput("change-brief-classification", brief.classification.value);
   setOutput("change-brief-material-differences-count", String(brief.material_differences.length));
   setOutput("change-brief-canonical-plan-digest", canonicalPlanDigest);
+  setOutput("change-brief-plan-base-sha", result.facts.base_sha);
+  setOutput("change-brief-plan-head-sha", result.facts.head_sha);
+  setOutput("change-brief-plan-ref", result.facts.ref ?? "");
   setOutput("change-brief-decision-readiness", managementBrief.readiness);
   setOutput("change-brief-source-collection", collection.status);
   setOutput(
@@ -4758,10 +5152,10 @@ async function run() {
   const functionRegionInput = getInput("function-region");
   try {
     if (functionRegionInput) {
-      (0, import_enforce15.parseFunctionRegion)(functionRegionInput);
-      process.env[import_enforce15.FUNCTION_REGION_ENV] = functionRegionInput.trim();
-    } else if (process.env[import_enforce15.FUNCTION_REGION_ENV]?.trim()) {
-      (0, import_enforce15.parseFunctionRegion)(process.env[import_enforce15.FUNCTION_REGION_ENV]);
+      (0, import_enforce16.parseFunctionRegion)(functionRegionInput);
+      process.env[import_enforce16.FUNCTION_REGION_ENV] = functionRegionInput.trim();
+    } else if (process.env[import_enforce16.FUNCTION_REGION_ENV]?.trim()) {
+      (0, import_enforce16.parseFunctionRegion)(process.env[import_enforce16.FUNCTION_REGION_ENV]);
     }
   } catch (err) {
     setOutput("decision", "error");
@@ -4812,6 +5206,14 @@ async function run() {
     await runSoloOperatorAttestStep(apiKey, apiUrl);
     return;
   }
+  if (getInput("admit-operation").toLowerCase() === "true") {
+    await runAdmitOperationStep(apiKey, apiUrl);
+    return;
+  }
+  if (getInput("establish-effect").toLowerCase() === "true") {
+    await runEstablishEffectStep(apiKey, apiUrl);
+    return;
+  }
   if (getInput("verify-permit").toLowerCase() === "true") {
     await runVerifyPermitStep(apiKey, apiUrl);
     return;
@@ -4836,7 +5238,7 @@ async function run() {
         { mask: maskValue }
       );
     } catch (err) {
-      const msg = err instanceof import_enforce14.EnforceError || err instanceof GateInfraError || err instanceof WorkloadIdentityError ? err.message : `Unexpected error: ${err instanceof Error ? err.message : String(err)}`;
+      const msg = err instanceof import_enforce15.EnforceError || err instanceof GateInfraError || err instanceof WorkloadIdentityError ? err.message : `Unexpected error: ${err instanceof Error ? err.message : String(err)}`;
       setOutput("verified", "false");
       setOutput("decisions", "[]");
       setOutput("batch-id", "");
@@ -5078,12 +5480,36 @@ async function run() {
   const maxWaitMinutes = Number.isFinite(maxWaitMinutesRaw) && maxWaitMinutesRaw > 0 ? maxWaitMinutesRaw : 30;
   const maxWaitMs = maxWaitMinutes * 6e4;
   const soloOperatorContext = (getInput("solo-operator-context") || "false").trim().toLowerCase() === "true";
+  const briefIdInput = getInput("change-brief-id").trim();
+  const briefDigestInput = getInput("canonical-plan-digest").trim();
+  if (briefIdInput === "" !== (briefDigestInput === "") || briefDigestInput !== "" && !/^sha256:[0-9a-f]{64}$/.test(briefDigestInput)) {
+    setOutput("decision", "deny");
+    setOutput("verified", "false");
+    setOutput("permit-issued", "false");
+    setOutput("verify-outcome", "invalid");
+    setOutput("verify-error-code", "MISSING_BINDING");
+    setFailed(
+      "AtlaSent Gate: `change-brief-id` and `canonical-plan-digest` must be supplied together, the digest as sha256:<64 lowercase hex> (the change-brief step's outputs). Deploy blocked (fail-closed)."
+    );
+    return;
+  }
+  const changeBriefBinding = briefIdInput ? { id: briefIdInput, canonicalPlanDigest: briefDigestInput } : void 0;
+  if (changeBriefBinding && !targetId) {
+    setOutput("decision", "deny");
+    setOutput("verified", "false");
+    setOutput("permit-issued", "false");
+    setOutput("verify-outcome", "invalid");
+    setOutput("verify-error-code", "MISSING_BINDING");
+    setFailed("AtlaSent Gate: binding a Change Brief requires `target-id` (the brief's target). Deploy blocked (fail-closed).");
+    return;
+  }
   const config = {
     apiKey,
     apiUrl,
     action: actionType,
     actor: actorId,
     actorIdentity: actorResolution.workloadIdentity?.assertion,
+    ...changeBriefBinding ? { changeBrief: changeBriefBinding, resourceId: targetId } : {},
     ...supplyChainAssertion ? { assertions: [supplyChainAssertion], resourceId: targetId } : {},
     environment,
     targetId,
@@ -5095,7 +5521,7 @@ async function run() {
     executionPayloadHash: directExecutionPayloadHash,
     // Re-present every binding provided here at verify, or fail closed
     // (MISSING_BINDING) rather than silently drop it.
-    requiredBindings: (0, import_enforce14.requiredBindingsFor)({
+    requiredBindings: (0, import_enforce15.requiredBindingsFor)({
       environment,
       targetId,
       executionPayloadHash: directExecutionPayloadHash
@@ -5202,7 +5628,7 @@ async function run() {
         const runUrl = `${gh.server_url}/${gh.repository}/actions/runs/${gh.run_id}`;
         const decisionStr = err.decision?.decision ?? "error";
         const isActionable = decisionStr === "deny" || decisionStr === "hold" || decisionStr === "escalate";
-        const reason = decisionStr === "deny" ? (0, import_enforce14.denyReasonText)(err.decision) : decisionStr === "hold" ? err.decision?.holdReason ?? "awaiting approval" : decisionStr === "escalate" ? "escalated \u2014 manual review required" : err.message.slice(0, 200);
+        const reason = decisionStr === "deny" ? (0, import_enforce15.denyReasonText)(err.decision) : decisionStr === "hold" ? err.decision?.holdReason ?? "awaiting approval" : decisionStr === "escalate" ? "escalated \u2014 manual review required" : err.message.slice(0, 200);
         if (slackWebhook && isActionable) {
           await notifySlack(slackWebhook, {
             decision: decisionStr,
@@ -5248,7 +5674,7 @@ async function run() {
       {
         const blockedDecision = err.decision?.decision;
         const summaryOutcome = blockedDecision === "deny" || blockedDecision === "hold" || blockedDecision === "escalate" ? blockedDecision : "error";
-        const summaryReason = summaryOutcome === "deny" ? err.decision?.denyReason || err.decision?.denyCode ? (0, import_enforce14.denyReasonText)(err.decision) : err.message : summaryOutcome === "hold" ? err.decision?.holdReason ?? "awaiting approval" : summaryOutcome === "escalate" ? "manual review required" : err.message;
+        const summaryReason = summaryOutcome === "deny" ? err.decision?.denyReason || err.decision?.denyCode ? (0, import_enforce15.denyReasonText)(err.decision) : err.message : summaryOutcome === "hold" ? err.decision?.holdReason ?? "awaiting approval" : summaryOutcome === "escalate" ? "manual review required" : err.message;
         appendToStepSummary(
           buildGateStepSummary({
             outcome: summaryOutcome,
@@ -5277,7 +5703,7 @@ async function run() {
           switch (err.decision?.decision) {
             case "deny":
               setFailed(
-                `Authorization DENIED: ${(0, import_enforce14.denyReasonText)(err.decision)}`
+                `Authorization DENIED: ${(0, import_enforce15.denyReasonText)(err.decision)}`
               );
               break;
             case "hold":
@@ -5337,15 +5763,15 @@ async function run() {
   let enforceResult;
   try {
     if (evaluateOnly) {
-      const decision = await (0, import_enforce14.evaluate)(config);
-      (0, import_enforce14.verify)(decision);
+      const decision = await (0, import_enforce15.evaluate)(config);
+      (0, import_enforce15.verify)(decision);
       enforceResult = { result: void 0, decision, verifyOutcome: void 0 };
     } else {
-      enforceResult = await (0, import_enforce14.enforce)(config, async () => {
+      enforceResult = await (0, import_enforce15.enforce)(config, async () => {
       });
     }
   } catch (err) {
-    if (err instanceof import_enforce14.EnforceError) {
+    if (err instanceof import_enforce15.EnforceError) {
       const canWaitForApproval = waitForApprovalInput && err.phase === "verify" && (err.decision?.decision === "hold" || err.decision?.decision === "escalate") && !!err.decision?.approvalRequestId;
       if (!canWaitForApproval) {
         await reportEnforceFailure(err);
@@ -5358,7 +5784,7 @@ async function run() {
       );
       let resolution;
       try {
-        resolution = await (0, import_enforce14.waitForApprovalResolution)({
+        resolution = await (0, import_enforce15.waitForApprovalResolution)({
           apiKey,
           apiUrl,
           approvalId: originalDecision.approvalRequestId,
@@ -5374,7 +5800,7 @@ async function run() {
         });
       } catch (waitErr) {
         await reportEnforceFailure(
-          waitErr instanceof import_enforce14.EnforceError ? new import_enforce14.EnforceError(waitErr.message, "evaluate", originalDecision) : new import_enforce14.EnforceError(
+          waitErr instanceof import_enforce15.EnforceError ? new import_enforce15.EnforceError(waitErr.message, "evaluate", originalDecision) : new import_enforce15.EnforceError(
             `Approval wait failed: ${waitErr instanceof Error ? waitErr.message : String(waitErr)}`,
             "evaluate",
             originalDecision
@@ -5385,7 +5811,7 @@ async function run() {
       if (resolution.status !== "approved" && resolution.status !== "approved_awaiting_claim" || !resolution.permitToken) {
         const reason = (resolution.claimFailure === "change_plan_mismatch" ? `human approval resolved to '${resolution.status}', but the claim was refused: the change plan presented at claim differs from the plan that was approved (change_plan_mismatch)` : `human approval resolved to '${resolution.status}'` + (resolution.claimFailure ? ` (permit claim failed: ${resolution.claimFailure})` : "")) + (resolution.reEvaluationDecision ? ` (fresh reevaluation: ${resolution.reEvaluationDecision})` : "") + " \u2014 deploy blocked (fail-closed).";
         await reportEnforceFailure(
-          new import_enforce14.EnforceError(`Authorization DENIED: ${reason}`, "verify", {
+          new import_enforce15.EnforceError(`Authorization DENIED: ${reason}`, "verify", {
             ...originalDecision,
             decision: "deny",
             denyReason: reason
@@ -5396,7 +5822,7 @@ async function run() {
       if (MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType) && !resolution.executionHashExpected) {
         const reason = "human approval was granted and a permit was claimed, but the claim response carried no execution_hash_expected, so the permit cannot be verified against its bound change plan \u2014 deploy blocked (fail-closed).";
         await reportEnforceFailure(
-          new import_enforce14.EnforceError(`Authorization DENIED: ${reason}`, "verify", {
+          new import_enforce15.EnforceError(`Authorization DENIED: ${reason}`, "verify", {
             ...originalDecision,
             decision: "deny",
             denyReason: reason
@@ -5419,13 +5845,13 @@ async function run() {
       } else {
         let vr;
         try {
-          vr = await (0, import_enforce14.verifyPermit)(
+          vr = await (0, import_enforce15.verifyPermit)(
             claimActorIdentity ? { ...config, actorIdentity: claimActorIdentity } : config,
             freshDecision
           );
         } catch (verifyErr) {
           await reportEnforceFailure(
-            verifyErr instanceof import_enforce14.EnforceError ? new import_enforce14.EnforceError(
+            verifyErr instanceof import_enforce15.EnforceError ? new import_enforce15.EnforceError(
               `Human approval was granted, but the claimed permit failed verification: ${verifyErr.message}`,
               "verify-permit",
               freshDecision,
@@ -5434,7 +5860,7 @@ async function run() {
                 verifyErrorCode: verifyErr.verifyErrorCode,
                 mismatchFields: verifyErr.mismatchFields
               }
-            ) : new import_enforce14.EnforceError(
+            ) : new import_enforce15.EnforceError(
               `Human approval was granted, but verifying the claimed permit failed: ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`,
               "verify-permit",
               freshDecision
@@ -5444,7 +5870,7 @@ async function run() {
         }
         if (!vr.verified) {
           await reportEnforceFailure(
-            new import_enforce14.EnforceError(
+            new import_enforce15.EnforceError(
               `Human approval was granted, but the fresh permit failed verification (${vr.outcome ?? "unknown"}) \u2014 deploy blocked (fail-closed).`,
               "verify-permit",
               freshDecision,
