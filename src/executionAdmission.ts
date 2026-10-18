@@ -32,10 +32,12 @@
 // as verified (establishment).
 
 import { createHash } from "crypto";
-import { functionRegionHeaders } from "@atlasent/enforce";
+import { CLOUD_LOCUS_CONTEXT_KEYS, functionRegionHeaders } from "@atlasent/enforce";
 
 const GITHUB_API_DEFAULT = "https://api.github.com";
 const PAYLOAD_HASH_RE = /^[0-9a-f]{64}$/;
+/** A workflow run has at most 1,000 jobs (GitHub's limit), i.e. 10 pages of 100. */
+const MAX_JOB_PAGES = 10;
 
 export class ExecutionAdmissionError extends Error {
   constructor(
@@ -76,6 +78,10 @@ export interface AdmitArgs {
   payloadHash: string;
   runId: string;
   executorActorIdentity?: Record<string, unknown>;
+  /** The evaluate step's context. Only the cloud execution locus
+   *  (context.aws / context.azure) is sent: a permit bound to one is refused
+   *  AWS_/AZURE_LOCUS_MISMATCH unless the same locus is presented. */
+  context?: Record<string, unknown>;
 }
 
 export interface AdmitResult {
@@ -139,6 +145,12 @@ export async function admitExecution(args: AdmitArgs, deps: Deps = {}): Promise<
     provider_idempotency_key: `github_actions_run:${args.runId}`,
     ...(args.executorActorIdentity ? { executor_actor_identity: args.executorActorIdentity } : {}),
   };
+  const locus: Record<string, unknown> = {};
+  for (const key of CLOUD_LOCUS_CONTEXT_KEYS) {
+    const value = args.context?.[key];
+    if (value != null) locus[key] = value;
+  }
+  if (Object.keys(locus).length > 0) body["context"] = locus;
 
   let response: Response;
   try {
@@ -263,10 +275,20 @@ export async function findDeploymentForJob(
 ): Promise<string> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const api = `${(args.githubApiUrl ?? GITHUB_API_DEFAULT).replace(/\/+$/, "")}/repos/${args.repository}`;
-  const jobs = (await githubJson(fetchImpl, `${api}/actions/runs/${args.runId}/jobs?per_page=100`, args.githubToken)) as {
-    jobs?: Array<{ id?: number; name?: string }>;
-  };
-  const matching = (jobs.jobs ?? []).filter((j) => j.name === args.deployJobName && typeof j.id === "number");
+  // A run can hold more than one page of jobs (large matrices), so read every
+  // page up to GitHub's own cap before requiring exactly one match.
+  const allJobs: Array<{ id?: number; name?: string }> = [];
+  for (let page = 1; page <= MAX_JOB_PAGES; page++) {
+    const jobs = (await githubJson(
+      fetchImpl,
+      `${api}/actions/runs/${args.runId}/jobs?per_page=100&page=${page}`,
+      args.githubToken,
+    )) as { jobs?: Array<{ id?: number; name?: string }> };
+    const pageJobs = jobs.jobs ?? [];
+    allJobs.push(...pageJobs);
+    if (pageJobs.length < 100) break;
+  }
+  const matching = allJobs.filter((j) => j.name === args.deployJobName && typeof j.id === "number");
   if (matching.length !== 1) {
     throw new ExecutionAdmissionError(
       `expected exactly one job named "${args.deployJobName}" in run ${args.runId}, found ${matching.length}`,

@@ -87,6 +87,18 @@ describe("admitExecution", () => {
     expect(err.message).toContain("PERMIT_ALREADY_USED");
   });
 
+  it("sends only the cloud execution locus from the context, and no context when there is none", async () => {
+    const calls: Call[] = [];
+    const ok = () => ({ status: 200, body: { operation_id: "op-1", attempt_id: "att-1" } });
+    await admitExecution(
+      { ...admitArgs, context: { azure: { subscription_id: "sub", resource_group: "rg" }, approvals: 2 } },
+      { fetchImpl: fakeFetch(ok, calls) },
+    );
+    await admitExecution({ ...admitArgs, context: { approvals: 2 } }, { fetchImpl: fakeFetch(ok, calls) });
+    expect(calls[0].body?.context).toEqual({ azure: { subscription_id: "sub", resource_group: "rg" } });
+    expect(calls[1].body).not.toHaveProperty("context");
+  });
+
   it("carries the runtime's verify_error_code from the real refusal envelope", async () => {
     // Shape of v1-consequential-operations' permit_verification_failed refusal
     // (errorResponse: error, message, status, plus outcome/verify_error_code/reason).
@@ -205,6 +217,24 @@ describe("findDeploymentForJob", () => {
         fetchImpl: world({ jobs: JOBS, deployments: [{ id: 1, statuses: [job(901)] }, { id: 2, statuses: [job(901)] }] }, []),
       }),
     ).rejects.toBeInstanceOf(ExecutionAdmissionError);
+  });
+
+  it("finds the deploy job on a later page of a large run", async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) => ({ id: 1000 + i, name: `matrix-${i}` }));
+    const calls: Call[] = [];
+    const id = await findDeploymentForJob(establishArgs, {
+      fetchImpl: fakeFetch((c) => {
+        if (c.url.includes("/jobs")) {
+          const page = Number(new URL(c.url).searchParams.get("page") ?? "1");
+          return { status: 200, body: { jobs: page === 1 ? page1 : page === 2 ? [{ id: 901, name: "deploy" }] : [] } };
+        }
+        if (/\/deployments\?/.test(c.url)) return { status: 200, body: [{ id: 2 }] };
+        if (/\/deployments\/2\/statuses/.test(c.url)) return { status: 200, body: [{ log_url: job(901) }] };
+        return { status: 599 };
+      }, calls),
+    });
+    expect(id).toBe("2");
+    expect(calls.filter((c) => c.url.includes("/jobs"))).toHaveLength(2);
   });
 
   it("refuses an ambiguous job name", async () => {

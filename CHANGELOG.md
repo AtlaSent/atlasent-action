@@ -12,6 +12,20 @@ function is `v1-approvals`), so every wait failed with a 404 about a second
 after the HOLD. It now uses `/v1-approvals/{id}` and
 `/v1-approvals/{id}/claim-permit`.
 
+### Fixed: admission and Change Brief follow-ups (review of #208)
+
+- `admit-operation` re-presents the cloud execution locus (`context.aws` /
+  `context.azure`, and nothing else of `context`), as `verify-permit` does. A
+  cloud-scoped permit was otherwise refused `AWS_/AZURE_LOCUS_MISMATCH`. This
+  also needs the runtime's consume-and-admit to forward it to its precheck.
+- `admit-operation` honors the evaluate step's `resolved-actor` for
+  optional-verified-actor actions (e.g. `package.release`), as `verify-permit`
+  does. Mandatory change-control actions still always re-mint.
+- `change-brief` sends the canonical action, so a legacy alias such as
+  `deployment.production` no longer produces `CHANGE_BRIEF_MISMATCH`.
+- `establish-effect` reads every page of the run's jobs, so a deploy job past
+  the first 100 (large matrices) is found.
+
 ### Changed: a refused admission outputs the runtime's reason
 
 `admit-operation` now sets `verify-error-code` to the runtime's
