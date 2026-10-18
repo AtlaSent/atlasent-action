@@ -2224,7 +2224,15 @@ describe("change-brief mode for a mandatory change-control action", () => {
     globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
       if (String(url).includes("/v1-change-brief")) {
         bodies.push(JSON.parse(String(init?.body)));
-        return new Response(JSON.stringify({ brief_id: "b-1", recommendation: { value: "review" }, classification: { value: "x" }, material_differences: [] }), { status: 200 });
+        return new Response(JSON.stringify({
+          brief_id: "b-1",
+          recommendation: { value: "request_evidence", rationale: "r" },
+          classification: { value: "review_ready", rationale: "r" },
+          material_differences: [],
+          missing_evidence: [],
+          baseline: { comparison_possible: false },
+          impact: { affected_principals: { determination: "unavailable", unavailable_reason: "none" } },
+        }), { status: 200 });
       }
       if (String(url).includes("/compare/")) return new Response(JSON.stringify({ files: [] }), { status: 200 });
       if (String(url).includes("/check-runs")) return new Response(JSON.stringify({ check_runs: [] }), { status: 200 });
@@ -2234,5 +2242,7 @@ describe("change-brief mode for a mandatory change-control action", () => {
     await run().catch(() => {});
 
     expect(bodies[0]).toMatchObject({ action_type: "production.deploy" });
+    const consoleUrl = new URL(readOutputs(outputFile)["change-brief-console-url"]);
+    expect(consoleUrl.searchParams.get("action_type")).toBe("production.deploy");
   });
 });

@@ -4906,7 +4906,7 @@ async function runChangeBriefStep(apiKey, apiUrl) {
   );
   setOutput("change-brief-decision-brief", JSON.stringify(managementBrief));
   const consoleUrl = `${consoleBaseUrl}/change-brief?` + new URLSearchParams({
-    action_type: actionType,
+    action_type: normalizedAction,
     target_system: targetSystem,
     target_id: targetId,
     environment,

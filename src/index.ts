@@ -1488,7 +1488,7 @@ async function runChangeBriefStep(apiKey: string, apiUrl: string): Promise<void>
   const consoleUrl =
     `${consoleBaseUrl}/change-brief?` +
     new URLSearchParams({
-      action_type: actionType,
+      action_type: normalizedAction,
       target_system: targetSystem,
       target_id: targetId,
       environment,
