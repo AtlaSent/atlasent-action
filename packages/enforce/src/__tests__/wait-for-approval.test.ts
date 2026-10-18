@@ -39,11 +39,11 @@ describe("waitForApprovalResolution", () => {
     ).rejects.toThrow(EnforceError);
   });
 
-  it("polls GET /v1/approvals/:id with the bearer token", async () => {
+  it("polls GET /v1-approvals/:id with the bearer token", async () => {
     mockGet.mockResolvedValueOnce(resp(200, { status: "denied" }));
     await waitForApprovalResolution(BASE_CONFIG);
     expect(mockGet).toHaveBeenCalledWith(
-      "https://api.test/v1/approvals/apr-1",
+      "https://api.test/v1-approvals/apr-1",
       { Authorization: "Bearer ask_test_key" },
     );
   });
@@ -62,7 +62,7 @@ describe("waitForApprovalResolution", () => {
       permitToken: "pt.v4.fresh",
     });
     expect(mockPost).toHaveBeenCalledWith(
-      "https://api.test/v1/approvals/apr-1/claim-permit",
+      "https://api.test/v1-approvals/apr-1/claim-permit",
       "{}",
       { Authorization: "Bearer ask_test_key" },
     );
@@ -181,7 +181,7 @@ describe("waitForApprovalResolution", () => {
       claimEnvironment: "live",
     });
     const [url, body] = mockPost.mock.calls[0];
-    expect(url).toBe("https://api.test/v1/approvals/apr-1/claim-permit");
+    expect(url).toBe("https://api.test/v1-approvals/apr-1/claim-permit");
     expect(JSON.parse(body as string)).toEqual({ actor_identity: IDENTITY, change_plan: CHANGE_PLAN });
     expect(result).toEqual({
       status: "approved_awaiting_claim",

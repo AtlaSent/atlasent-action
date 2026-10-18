@@ -98,7 +98,7 @@ describe("region header on runtime requests", () => {
       maxWaitMs: 1_000,
     }).catch(() => undefined);
     const [url, headers] = mockGet.mock.calls[0];
-    expect(url).toBe(`${HOSTED}/v1/approvals/ap-1`);
+    expect(url).toBe(`${HOSTED}/v1-approvals/ap-1`);
     expect(headers).toEqual({ Authorization: "Bearer ask_test_key", "x-region": "us-west-1" });
   });
 });

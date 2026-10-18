@@ -114,6 +114,10 @@ async function evaluate(config) {
         payload["state_snapshot"] = snap;
     if (config.changePlan != null)
         payload["change_plan"] = config.changePlan;
+    if (config.changeBrief != null) {
+        payload["change_brief_id"] = config.changeBrief.id;
+        payload["canonical_plan_digest"] = config.changeBrief.canonicalPlanDigest;
+    }
     if (config.evidenceProfile != null)
         payload["evidence_profile"] = config.evidenceProfile;
     if (config.quorum != null)
@@ -216,12 +220,12 @@ function verify(decision) {
 // Step 2b — waitForApprovalResolution (pause-and-resume approval protocol)
 //
 // For a hold/escalate decision that carries approvalRequestId (see
-// mapDecision below), poll GET /v1/approvals/{id} on the runtime API —
+// mapDecision below), poll GET /v1-approvals/{id} on the runtime API —
 // atlasent-api's v1-approvals endpoint — on a bounded interval/timeout for
 // the human resolution. That status poll never carries the raw permit token
 // (server-side redesign: a broadly-row-readable table must not hand one out
 // off a plain GET) — on "approved" this function makes one further call,
-// POST /v1/approvals/{id}/claim-permit, an atomic one-time claim (see
+// POST /v1-approvals/{id}/claim-permit, an atomic one-time claim (see
 // claimApprovalPermit above). Returns only on a terminal, non-"pending"
 // status:
 //   - status "approved" / "approved_awaiting_claim": the caller should verify the returned permitToken
@@ -263,7 +267,7 @@ function sleep(ms) {
  * with `{}`.
  */
 async function claimApprovalPermit(config, apiUrl, row) {
-    const url = `${apiUrl}/v1/approvals/${encodeURIComponent(config.approvalId)}/claim-permit`;
+    const url = `${apiUrl}/v1-approvals/${encodeURIComponent(config.approvalId)}/claim-permit`;
     let requestBody = "{}";
     if (config.buildClaimBody) {
         let built;
@@ -317,7 +321,7 @@ async function waitForApprovalResolution(config) {
         throw new EnforceError("Cannot wait for approval: no approvalRequestId on the hold/escalate decision", "evaluate");
     }
     const apiUrl = (config.apiUrl ?? DEFAULT_API_URL).replace(/\/$/, "");
-    const url = `${apiUrl}/v1/approvals/${encodeURIComponent(config.approvalId)}`;
+    const url = `${apiUrl}/v1-approvals/${encodeURIComponent(config.approvalId)}`;
     const deadline = Date.now() + config.maxWaitMs;
     while (Date.now() < deadline) {
         let status;

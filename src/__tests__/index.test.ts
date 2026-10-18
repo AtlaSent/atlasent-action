@@ -1963,3 +1963,191 @@ describe("behavior insights (insights-org-id)", () => {
     expect(outputs["insights-skipped"]).toBe("[]");
   });
 });
+
+describe("change-brief binding on evaluate", () => {
+  it("fails closed when only one half of the brief binding is supplied", async () => {
+    setApiKey();
+    setInput("action", "production.deploy");
+    setInput("environment", "production");
+    setInput("change-brief-id", "brief-1");
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+
+    expect(mockEnforce).not.toHaveBeenCalled();
+    expect(mockEvaluate).not.toHaveBeenCalled();
+    expect(readOutputs(outputFile)).toMatchObject({ verified: "false", "verify-error-code": "MISSING_BINDING" });
+  });
+
+  it("fails closed on a malformed digest", async () => {
+    setApiKey();
+    setInput("action", "production.deploy");
+    setInput("environment", "production");
+    setInput("change-brief-id", "brief-1");
+    setInput("canonical-plan-digest", "sha256:nothex");
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(mockEnforce).not.toHaveBeenCalled();
+  });
+
+  it("refuses a brief binding without target-id (the runtime compares it with the brief's target)", async () => {
+    setApiKey();
+    setInput("action", "production.deploy");
+    setInput("environment", "production");
+    setInput("change-brief-id", "brief-1");
+    setInput("canonical-plan-digest", `sha256:${"d".repeat(64)}`);
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(mockEnforce).not.toHaveBeenCalled();
+  });
+
+  it("binds both fields and sends the target as resource_id", async () => {
+    setApiKey();
+    setInput("action", "production.deploy");
+    setInput("environment", "production");
+    setInput("target-id", "service:payments");
+    setInput("change-brief-id", "brief-1");
+    setInput("canonical-plan-digest", `sha256:${"d".repeat(64)}`);
+    mockEnforce.mockResolvedValueOnce(makeAllowResult());
+
+    await run();
+
+    const config = mockEnforce.mock.calls[0][0] as { changeBrief?: unknown; resourceId?: string };
+    expect(config.changeBrief).toEqual({ id: "brief-1", canonicalPlanDigest: `sha256:${"d".repeat(64)}` });
+    expect(config.resourceId).toBe("service:payments");
+  });
+});
+
+describe("admit-operation execution boundary", () => {
+  let savedFetch: typeof fetch;
+  beforeEach(() => {
+    savedFetch = globalThis.fetch;
+    process.env["GITHUB_RUN_ID"] = "4242";
+  });
+  afterEach(() => {
+    globalThis.fetch = savedFetch;
+  });
+
+  function admitInputs() {
+    setApiKey();
+    setInput("admit-operation", "true");
+    setInput("permit-token", "pt-unconsumed");
+    setInput("action", "production.deploy");
+    setInput("environment", "production");
+    setInput("target-id", "service:payments");
+  }
+
+  it("refuses production.deploy without the runtime execution hash, before any request", async () => {
+    admitInputs();
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(readOutputs(outputFile)).toMatchObject({ verified: "false", admitted: "false", "verify-error-code": "MISSING_BINDING" });
+  });
+
+  it("refuses when no permit was issued", async () => {
+    admitInputs();
+    delete process.env["INPUT_PERMIT-TOKEN"];
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(readOutputs(outputFile)).toMatchObject({ verified: "false", "verify-error-code": "PERMIT_MISSING" });
+  });
+
+  it("admits with the minted workload actor and outputs verified=true + operation identifiers", async () => {
+    admitInputs();
+    setInput("execution-hash", "e".repeat(64));
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ operation_id: "op-9", attempt_id: "att-9" }), { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await run();
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toContain("/v1-consequential-operations/consume-and-admit");
+    const body = JSON.parse(String(init.body));
+    expect(body).toMatchObject({
+      actor_id: "github-actions:repo:123:workflow:deploy",
+      payload_hash: "e".repeat(64),
+      provider_idempotency_key: "github_actions_run:4242",
+      executor_actor_identity: { version: "actor_identity.v1" },
+    });
+    expect(readOutputs(outputFile)).toMatchObject({ verified: "true", admitted: "true", "operation-id": "op-9", "attempt-id": "att-9" });
+  });
+
+  it("a runtime refusal leaves verified=false and fails the step", async () => {
+    admitInputs();
+    setInput("execution-hash", "e".repeat(64));
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ error_code: "permit_verification_failed", message: "PERMIT_ALREADY_USED" }), { status: 403 }),
+    ) as unknown as typeof fetch;
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(readOutputs(outputFile)).toMatchObject({
+      verified: "false",
+      admitted: "false",
+      "verify-error-code": "ADMISSION_REFUSED",
+      "admission-outcome-unknown": "false",
+    });
+  });
+
+  it("outputs the runtime's verify_error_code for a refused admission, so a refusal is assertable", async () => {
+    admitInputs();
+    setInput("execution-hash", "e".repeat(64));
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({ error: "permit_verification_failed", message: "did not verify", status: 403, outcome: "deny", verify_error_code: "ENVIRONMENT_MISMATCH" }),
+        { status: 403 },
+      ),
+    ) as unknown as typeof fetch;
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(readOutputs(outputFile)).toMatchObject({ verified: "false", admitted: "false", "verify-error-code": "ENVIRONMENT_MISMATCH" });
+  });
+});
+
+describe("change-brief mode for a mandatory change-control action", () => {
+  let savedFetch: typeof fetch;
+  beforeEach(() => {
+    savedFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = savedFetch;
+  });
+
+  it("creates the brief as the verified workload actor with the same execution_change_plan evaluate will send", async () => {
+    setApiKey();
+    setInput("change-brief", "true");
+    setInput("action", "production.deploy");
+    setInput("environment", "production");
+    setInput("target-id", "service:payments");
+    setInput("change-brief-base-sha", "1".repeat(40));
+    setInput("change-brief-head-sha", "abc123");
+    process.env["GITHUB_REPOSITORY"] = "acme/app";
+    process.env["GITHUB_SHA"] = "abc123";
+    process.env["GITHUB_EVENT_NAME"] = "workflow_dispatch";
+    process.env["GITHUB_TOKEN"] = "ghs_test";
+    const bodies: Record<string, unknown>[] = [];
+    globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/v1-change-brief")) {
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ brief_id: "b-1", recommendation: { value: "review" }, classification: { value: "x" }, material_differences: [] }), { status: 200 });
+      }
+      if (String(url).includes("/compare/")) return new Response(JSON.stringify({ files: [] }), { status: 200 });
+      if (String(url).includes("/check-runs")) return new Response(JSON.stringify({ check_runs: [] }), { status: 200 });
+      return new Response("[]", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await run().catch(() => {});
+
+    expect(mockMintWorkloadIdentity).toHaveBeenCalled();
+    expect(bodies[0]).toMatchObject({
+      actor_id: "github-actions:repo:123:workflow:deploy",
+      execution_change_plan: { operation: "deploy", revision: "abc123" },
+      target_id: "service:payments",
+    });
+  });
+});

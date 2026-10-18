@@ -132,6 +132,22 @@ describe("evaluate", () => {
     expect((body["context"] as Record<string, unknown>)["change_plan"]).toBeUndefined();
   });
 
+  it("forwards a Change Brief binding as top-level change_brief_id + canonical_plan_digest", async () => {
+    mockResponse(200, { decision: "allow" });
+    const digest = `sha256:${"a".repeat(64)}`;
+    await evaluate({ ...BASE_CONFIG, changeBrief: { id: "brief-1", canonicalPlanDigest: digest } });
+    const body = JSON.parse(mockPost.mock.calls[0][1] as string) as Record<string, unknown>;
+    expect(body["change_brief_id"]).toBe("brief-1");
+    expect(body["canonical_plan_digest"]).toBe(digest);
+    expect((body["context"] as Record<string, unknown>)["change_brief_id"]).toBeUndefined();
+
+    mockResponse(200, { decision: "allow" });
+    await evaluate({ ...BASE_CONFIG });
+    const bare = JSON.parse(mockPost.mock.calls[1][1] as string) as Record<string, unknown>;
+    expect("change_brief_id" in bare).toBe(false);
+    expect("canonical_plan_digest" in bare).toBe(false);
+  });
+
   it("forwards evidence_profile as a top-level field, distinct from change_plan", async () => {
     mockResponse(200, { decision: "allow" });
     const evidenceProfile = {

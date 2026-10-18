@@ -480,6 +480,12 @@ export interface RunChangeBriefOptions {
   overrideHeadSha?: string;
   workflow?: { name: string; run_id: string | number; run_url?: string | null } | null;
   rollback?: GithubChangePlanFacts["rollback"];
+  /**
+   * The execution-coordinate plan a later evaluate will send as change_plan.
+   * v1-evaluate refuses (CHANGE_BRIEF_MISMATCH) a mandatory change-control
+   * evaluation that binds a brief created without the same plan.
+   */
+  executionChangePlan?: { operation: string; revision?: string; artifact_ref?: string };
   now?: () => Date;
   fetchImpl?: typeof fetch;
   readFile?: (path: string) => string;
@@ -746,6 +752,7 @@ export async function runChangeBrief(opts: RunChangeBriefOptions): Promise<RunCh
         change_request: opts.changeRequest,
         plan_format: "git-sha",
         github_change_plan: facts,
+        ...(opts.executionChangePlan ? { execution_change_plan: opts.executionChangePlan } : {}),
       }),
     });
   } catch (err) {

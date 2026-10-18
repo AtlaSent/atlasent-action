@@ -402,6 +402,24 @@ execution hash from that complete plan. `mode: evaluate-only` exposes that
 binding as `execution-hash`; pass it unchanged to the later verify step while
 independently re-hashing the downloaded bytes against `artifact-digest`.
 
+## Full GitHub Gate journey (hold, approve, admit, deploy, establish)
+
+For a governed production deploy end to end, use the two execution modes
+after the gate:
+
+- `admit-operation: "true"` replaces the boundary `verify-permit` step. It
+  verifies the permit, then consumes it and records a durable operation in one
+  transaction, committing this workflow run. Gate the deploy job on its
+  `verified` output.
+- `establish-effect: "true"` runs after the deploy job. The AtlaSent runtime
+  reads GitHub's run, deployment and status itself and decides whether the
+  authorized change happened. It never reports success on the workflow's word.
+
+Establishment needs the evaluation bound to a Change Brief (`change-brief-id`
++ `canonical-plan-digest` inputs, from a `change-brief: "true"` step). The
+complete workflow, prerequisites and refusal table are in
+[docs/github-gate.md](docs/github-gate.md).
+
 ## Clinical example
 
 The same execution contract can gate a provisioned clinical action:
@@ -532,7 +550,7 @@ What actually happens, end to end:
 
 1. `/v1-evaluate` returns `hold`/`escalate` with an `approval_request_id`.
    This step does **not** deploy yet — it polls
-   `GET /v1/approvals/{approval_request_id}` on a 5-second interval, bounded
+   `GET /v1-approvals/{approval_request_id}` on a 5-second interval, bounded
    by `max-wait-minutes` (default 30).
 2. A human approves or rejects in AtlaSent Console, acting under their own
    identity. Their action causes the **runtime** to re-evaluate and, on
@@ -542,7 +560,7 @@ What actually happens, end to end:
    poll itself never carries the fresh permit token — a broadly-readable
    status row must not hand out a live bearer off a plain GET. On
    `approved` (or `approved_awaiting_claim`), this step makes one further call,
-   `POST /v1/approvals/{approval_request_id}/claim-permit`, an atomic
+   `POST /v1-approvals/{approval_request_id}/claim-permit`, an atomic
    one-time claim: the first caller to claim receives the token; any later
    claim (a retry, a second poller) gets nothing back. It then re-verifies
    that claimed permit against the **same** `action` / `target-id` /

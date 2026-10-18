@@ -11,7 +11,7 @@
 //
 // This file now delegates to @atlasent/enforce's waitForApprovalResolution(),
 // the canonical implementation, which polls the REAL status endpoint —
-// `GET /v1/approvals/:id` (atlasent-api's v1-approvals, single-item route
+// `GET /v1-approvals/:id` (atlasent-api's v1-approvals, single-item route
 // added alongside this change) — and is also what the primary single-eval
 // path (src/index.ts) uses directly.
 //
