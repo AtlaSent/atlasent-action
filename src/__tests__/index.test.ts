@@ -2107,6 +2107,63 @@ describe("admit-operation execution boundary", () => {
     await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
     expect(readOutputs(outputFile)).toMatchObject({ verified: "false", admitted: "false", "verify-error-code": "ENVIRONMENT_MISMATCH" });
   });
+
+  it("re-presents the cloud execution locus (and nothing else of the context) at admission", async () => {
+    admitInputs();
+    setInput("execution-hash", "e".repeat(64));
+    setInput("context", JSON.stringify({ aws: { account_id: "111122223333", region: "us-east-1" }, ticket: "CHG-1" }));
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ operation_id: "op-9", attempt_id: "att-9" }), { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await run();
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+    expect(body.context).toEqual({ aws: { account_id: "111122223333", region: "us-east-1" } });
+  });
+
+  it("fails closed on an unparseable context, before any request", async () => {
+    admitInputs();
+    setInput("execution-hash", "e".repeat(64));
+    setInput("context", "{not json");
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(readOutputs(outputFile)).toMatchObject({ admitted: "false", "verify-error-code": "INVALID_CONTEXT" });
+  });
+
+  it("admits an optional-verified-actor action as the evaluate step's resolved-actor, without re-minting", async () => {
+    admitInputs();
+    setInput("action", "package.release");
+    setInput("artifact-digest", "sha256:" + "a".repeat(64));
+    setInput("resolved-actor", "github:octocat");
+    mockMintWorkloadIdentity.mockClear();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ operation_id: "op-9", attempt_id: "att-9" }), { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await run();
+
+    expect(mockMintWorkloadIdentity).not.toHaveBeenCalled();
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+    expect(body.actor_id).toBe("github:octocat");
+    expect(body.executor_actor_identity).toBeUndefined();
+  });
+
+  it("ignores resolved-actor for a mandatory change-control action and re-mints the workload identity", async () => {
+    admitInputs();
+    setInput("execution-hash", "e".repeat(64));
+    setInput("resolved-actor", "github:attacker");
+    mockMintWorkloadIdentity.mockClear();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ operation_id: "op-9", attempt_id: "att-9" }), { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await run();
+
+    expect(mockMintWorkloadIdentity).toHaveBeenCalled();
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+    expect(body.actor_id).toBe("github-actions:repo:123:workflow:deploy");
+  });
 });
 
 describe("change-brief mode for a mandatory change-control action", () => {
@@ -2149,5 +2206,43 @@ describe("change-brief mode for a mandatory change-control action", () => {
       execution_change_plan: { operation: "deploy", revision: "abc123" },
       target_id: "service:payments",
     });
+  });
+
+  it("creates the brief for the canonical action when given a legacy alias, as evaluate will send it", async () => {
+    setApiKey();
+    setInput("change-brief", "true");
+    setInput("action", "deployment.production");
+    setInput("environment", "production");
+    setInput("target-id", "service:payments");
+    setInput("change-brief-base-sha", "1".repeat(40));
+    setInput("change-brief-head-sha", "abc123");
+    process.env["GITHUB_REPOSITORY"] = "acme/app";
+    process.env["GITHUB_SHA"] = "abc123";
+    process.env["GITHUB_EVENT_NAME"] = "workflow_dispatch";
+    process.env["GITHUB_TOKEN"] = "ghs_test";
+    const bodies: Record<string, unknown>[] = [];
+    globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/v1-change-brief")) {
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({
+          brief_id: "b-1",
+          recommendation: { value: "request_evidence", rationale: "r" },
+          classification: { value: "review_ready", rationale: "r" },
+          material_differences: [],
+          missing_evidence: [],
+          baseline: { comparison_possible: false },
+          impact: { affected_principals: { determination: "unavailable", unavailable_reason: "none" } },
+        }), { status: 200 });
+      }
+      if (String(url).includes("/compare/")) return new Response(JSON.stringify({ files: [] }), { status: 200 });
+      if (String(url).includes("/check-runs")) return new Response(JSON.stringify({ check_runs: [] }), { status: 200 });
+      return new Response("[]", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await run().catch(() => {});
+
+    expect(bodies[0]).toMatchObject({ action_type: "production.deploy" });
+    const consoleUrl = new URL(readOutputs(outputFile)["change-brief-console-url"]);
+    expect(consoleUrl.searchParams.get("action_type")).toBe("production.deploy");
   });
 });

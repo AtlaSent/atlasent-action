@@ -3676,6 +3676,7 @@ var import_crypto = require("crypto");
 var import_enforce14 = __toESM(require_dist());
 var GITHUB_API_DEFAULT2 = "https://api.github.com";
 var PAYLOAD_HASH_RE = /^[0-9a-f]{64}$/;
+var MAX_JOB_PAGES = 10;
 var ExecutionAdmissionError = class extends Error {
   constructor(message, httpStatus, outcomeUnknown = false, verifyErrorCode = null) {
     super(message);
@@ -3736,6 +3737,14 @@ async function admitExecution(args, deps = {}) {
     provider_idempotency_key: `github_actions_run:${args.runId}`,
     ...args.executorActorIdentity ? { executor_actor_identity: args.executorActorIdentity } : {}
   };
+  const locus = {};
+  for (const key of import_enforce14.CLOUD_LOCUS_CONTEXT_KEYS) {
+    const value = args.context?.[key];
+    if (value != null)
+      locus[key] = value;
+  }
+  if (Object.keys(locus).length > 0)
+    body["context"] = locus;
   let response;
   try {
     response = await fetchImpl(`${apiUrl}/v1-consequential-operations/consume-and-admit`, {
@@ -3804,8 +3813,19 @@ async function githubJson(fetchImpl, url, token) {
 async function findDeploymentForJob(args, deps = {}) {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const api = `${(args.githubApiUrl ?? GITHUB_API_DEFAULT2).replace(/\/+$/, "")}/repos/${args.repository}`;
-  const jobs = await githubJson(fetchImpl, `${api}/actions/runs/${args.runId}/jobs?per_page=100`, args.githubToken);
-  const matching = (jobs.jobs ?? []).filter((j) => j.name === args.deployJobName && typeof j.id === "number");
+  const allJobs = [];
+  for (let page = 1; page <= MAX_JOB_PAGES; page++) {
+    const jobs = await githubJson(
+      fetchImpl,
+      `${api}/actions/runs/${args.runId}/jobs?per_page=100&page=${page}`,
+      args.githubToken
+    );
+    const pageJobs = jobs.jobs ?? [];
+    allJobs.push(...pageJobs);
+    if (pageJobs.length < 100)
+      break;
+  }
+  const matching = allJobs.filter((j) => j.name === args.deployJobName && typeof j.id === "number");
   if (matching.length !== 1) {
     throw new ExecutionAdmissionError(
       `expected exactly one job named "${args.deployJobName}" in run ${args.runId}, found ${matching.length}`,
@@ -4468,18 +4488,40 @@ async function runAdmitOperationStep(apiKey, apiUrl) {
     return;
   }
   const payloadHash = MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType) ? runtimeExecutionHash : normalizeExecutionPayloadHash(getInput("artifact-digest") || void 0);
-  let actorResolution;
-  try {
-    actorResolution = await resolveProtectedActor({
-      apiKey,
-      apiUrl,
-      actionType,
-      environment,
-      triggeringActor: getInput("actor") || "unknown"
-    });
-  } catch (error) {
-    fail("ACTOR_UNVERIFIED", error instanceof Error ? error.message : String(error));
-    return;
+  let admitContext;
+  const rawContext = getInput("context");
+  if (rawContext) {
+    try {
+      const parsed = JSON.parse(rawContext);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+        throw new Error("not an object");
+      admitContext = parsed;
+    } catch {
+      fail("INVALID_CONTEXT", "the 'context' input is not a JSON object.");
+      return;
+    }
+  }
+  const carriedActor = OPTIONAL_VERIFIED_ACTOR_ACTIONS.has(actionType) ? getInput("resolved-actor") || void 0 : void 0;
+  let actorId;
+  let executorActorIdentity;
+  if (carriedActor) {
+    actorId = carriedActor;
+  } else {
+    let actorResolution;
+    try {
+      actorResolution = await resolveProtectedActor({
+        apiKey,
+        apiUrl,
+        actionType,
+        environment,
+        triggeringActor: getInput("actor") || "unknown"
+      });
+    } catch (error) {
+      fail("ACTOR_UNVERIFIED", error instanceof Error ? error.message : String(error));
+      return;
+    }
+    actorId = actorResolution.actorId;
+    executorActorIdentity = actorResolution.workloadIdentity?.assertion;
   }
   try {
     const admitted = await admitExecution({
@@ -4487,12 +4529,13 @@ async function runAdmitOperationStep(apiKey, apiUrl) {
       apiKey,
       permitToken,
       actionType,
-      actorId: actorResolution.actorId,
+      actorId,
       targetId,
       environment,
       payloadHash: payloadHash ?? "",
       runId: gh.run_id,
-      ...actorResolution.workloadIdentity ? { executorActorIdentity: actorResolution.workloadIdentity.assertion } : {}
+      ...executorActorIdentity ? { executorActorIdentity } : {},
+      ...admitContext ? { context: admitContext } : {}
     });
     setOutput("verified", "true");
     setOutput("admitted", "true");
@@ -4812,7 +4855,9 @@ async function runChangeBriefStep(apiKey, apiUrl) {
     result = await runChangeBrief({
       apiKey,
       apiUrl,
-      actionType,
+      // The canonical action: evaluate normalizes the same input, and the
+      // runtime refuses CHANGE_BRIEF_MISMATCH when the two differ.
+      actionType: normalizedAction,
       targetSystem,
       targetId,
       environment,
@@ -4861,7 +4906,7 @@ async function runChangeBriefStep(apiKey, apiUrl) {
   );
   setOutput("change-brief-decision-brief", JSON.stringify(managementBrief));
   const consoleUrl = `${consoleBaseUrl}/change-brief?` + new URLSearchParams({
-    action_type: actionType,
+    action_type: normalizedAction,
     target_system: targetSystem,
     target_id: targetId,
     environment,

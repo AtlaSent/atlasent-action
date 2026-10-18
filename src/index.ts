@@ -961,18 +961,50 @@ async function runAdmitOperationStep(apiKey: string, apiUrl: string): Promise<vo
     ? runtimeExecutionHash
     : normalizeExecutionPayloadHash(getInput("artifact-digest") || undefined);
 
-  let actorResolution: ProtectedActorResolution;
-  try {
-    actorResolution = await resolveProtectedActor({
-      apiKey,
-      apiUrl,
-      actionType,
-      environment,
-      triggeringActor: getInput("actor") || "unknown",
-    });
-  } catch (error) {
-    fail("ACTOR_UNVERIFIED", error instanceof Error ? error.message : String(error));
-    return;
+  // The cloud execution locus signed into the permit must be presented again,
+  // exactly as at verify-permit. Unparseable JSON fails closed.
+  let admitContext: Record<string, unknown> | undefined;
+  const rawContext = getInput("context");
+  if (rawContext) {
+    try {
+      const parsed: unknown = JSON.parse(rawContext);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+      admitContext = parsed as Record<string, unknown>;
+    } catch {
+      fail("INVALID_CONTEXT", "the 'context' input is not a JSON object.");
+      return;
+    }
+  }
+
+  // Same rule as runVerifyPermitStep: for an OPTIONAL_VERIFIED_ACTOR_ACTIONS
+  // type the evaluate step's resolved-actor output is the actor the permit is
+  // bound to, so it is used as given rather than re-resolved (a second mint
+  // can fall back differently). A mandatory change-control action always
+  // re-mints: a caller-supplied text input never stands in for its verified
+  // workload identity.
+  const carriedActor = OPTIONAL_VERIFIED_ACTOR_ACTIONS.has(actionType)
+    ? getInput("resolved-actor") || undefined
+    : undefined;
+  let actorId: string;
+  let executorActorIdentity: Record<string, unknown> | undefined;
+  if (carriedActor) {
+    actorId = carriedActor;
+  } else {
+    let actorResolution: ProtectedActorResolution;
+    try {
+      actorResolution = await resolveProtectedActor({
+        apiKey,
+        apiUrl,
+        actionType,
+        environment,
+        triggeringActor: getInput("actor") || "unknown",
+      });
+    } catch (error) {
+      fail("ACTOR_UNVERIFIED", error instanceof Error ? error.message : String(error));
+      return;
+    }
+    actorId = actorResolution.actorId;
+    executorActorIdentity = actorResolution.workloadIdentity?.assertion;
   }
 
   try {
@@ -981,14 +1013,13 @@ async function runAdmitOperationStep(apiKey: string, apiUrl: string): Promise<vo
       apiKey,
       permitToken,
       actionType,
-      actorId: actorResolution.actorId,
+      actorId,
       targetId,
       environment,
       payloadHash: payloadHash ?? "",
       runId: gh.run_id,
-      ...(actorResolution.workloadIdentity
-        ? { executorActorIdentity: actorResolution.workloadIdentity.assertion }
-        : {}),
+      ...(executorActorIdentity ? { executorActorIdentity } : {}),
+      ...(admitContext ? { context: admitContext } : {}),
     });
     setOutput("verified", "true");
     setOutput("admitted", "true");
@@ -1389,7 +1420,9 @@ async function runChangeBriefStep(apiKey: string, apiUrl: string): Promise<void>
     result = await runChangeBrief({
       apiKey,
       apiUrl,
-      actionType,
+      // The canonical action: evaluate normalizes the same input, and the
+      // runtime refuses CHANGE_BRIEF_MISMATCH when the two differ.
+      actionType: normalizedAction,
       targetSystem,
       targetId,
       environment,
@@ -1455,7 +1488,7 @@ async function runChangeBriefStep(apiKey: string, apiUrl: string): Promise<void>
   const consoleUrl =
     `${consoleBaseUrl}/change-brief?` +
     new URLSearchParams({
-      action_type: actionType,
+      action_type: normalizedAction,
       target_system: targetSystem,
       target_id: targetId,
       environment,
