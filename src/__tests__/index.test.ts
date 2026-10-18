@@ -2093,6 +2093,20 @@ describe("admit-operation execution boundary", () => {
       "admission-outcome-unknown": "false",
     });
   });
+
+  it("outputs the runtime's verify_error_code for a refused admission, so a refusal is assertable", async () => {
+    admitInputs();
+    setInput("execution-hash", "e".repeat(64));
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({ error: "permit_verification_failed", message: "did not verify", status: 403, outcome: "deny", verify_error_code: "ENVIRONMENT_MISMATCH" }),
+        { status: 403 },
+      ),
+    ) as unknown as typeof fetch;
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(readOutputs(outputFile)).toMatchObject({ verified: "false", admitted: "false", "verify-error-code": "ENVIRONMENT_MISMATCH" });
+  });
 });
 
 describe("change-brief mode for a mandatory change-control action", () => {

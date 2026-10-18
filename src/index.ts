@@ -1004,7 +1004,10 @@ async function runAdmitOperationStep(apiKey: string, apiUrl: string): Promise<vo
   } catch (error) {
     const e = error instanceof ExecutionAdmissionError ? error : null;
     setOutput("admission-outcome-unknown", e?.outcomeUnknown ? "true" : "false");
-    fail(e?.outcomeUnknown ? "ADMISSION_OUTCOME_UNKNOWN" : "ADMISSION_REFUSED", error instanceof Error ? error.message : String(error));
+    fail(
+      e?.outcomeUnknown ? "ADMISSION_OUTCOME_UNKNOWN" : (e?.verifyErrorCode ?? "ADMISSION_REFUSED"),
+      error instanceof Error ? error.message : String(error),
+    );
   }
 }
 

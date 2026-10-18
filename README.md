@@ -548,7 +548,7 @@ What actually happens, end to end:
 
 1. `/v1-evaluate` returns `hold`/`escalate` with an `approval_request_id`.
    This step does **not** deploy yet — it polls
-   `GET /v1/approvals/{approval_request_id}` on a 5-second interval, bounded
+   `GET /v1-approvals/{approval_request_id}` on a 5-second interval, bounded
    by `max-wait-minutes` (default 30).
 2. A human approves or rejects in AtlaSent Console, acting under their own
    identity. Their action causes the **runtime** to re-evaluate and, on
@@ -558,7 +558,7 @@ What actually happens, end to end:
    poll itself never carries the fresh permit token — a broadly-readable
    status row must not hand out a live bearer off a plain GET. On
    `approved` (or `approved_awaiting_claim`), this step makes one further call,
-   `POST /v1/approvals/{approval_request_id}/claim-permit`, an atomic
+   `POST /v1-approvals/{approval_request_id}/claim-permit`, an atomic
    one-time claim: the first caller to claim receives the token; any later
    claim (a retry, a second poller) gets nothing back. It then re-verifies
    that claimed permit against the **same** `action` / `target-id` /

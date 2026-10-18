@@ -46,7 +46,7 @@ inputs:
     default: 'enforce'
   wait-for-approval:
     description: |
-      Set "true" to pause-and-resume on a HOLD/ESCALATE decision instead of failing the step immediately. When the runtime returns hold/escalate with an approval_request_id, this step polls GET /v1/approvals/{id} on atlasent-api (bounded by max-wait-minutes) for a human resolution in AtlaSent Console. On "approved" or "approved_awaiting_claim" it claims the permit (POST /v1/approvals/{id}/claim-permit); for a mandatory change-control action (e.g. production.deploy) the claim carries this job's freshly minted actor_identity and the SAME change_plan sent at evaluate, so the runtime reevaluates against the executor and refuses a changed plan. In mode: enforce the claimed permit is then verified and consumed with payload_hash = the claim's execution_hash_expected — never trusting "approved" alone. In mode: evaluate-only the claimed permit-token and execution-hash are output UNCONSUMED for a later verify-permit step. Denied, expired, revoked, timed-out, a refused claim, a claim with no execution hash (mandatory actions), or a permit that fails verification all fail closed.
+      Set "true" to pause-and-resume on a HOLD/ESCALATE decision instead of failing the step immediately. When the runtime returns hold/escalate with an approval_request_id, this step polls GET /v1-approvals/{id} on atlasent-api (bounded by max-wait-minutes) for a human resolution in AtlaSent Console. On "approved" or "approved_awaiting_claim" it claims the permit (POST /v1-approvals/{id}/claim-permit); for a mandatory change-control action (e.g. production.deploy) the claim carries this job's freshly minted actor_identity and the SAME change_plan sent at evaluate, so the runtime reevaluates against the executor and refuses a changed plan. In mode: enforce the claimed permit is then verified and consumed with payload_hash = the claim's execution_hash_expected — never trusting "approved" alone. In mode: evaluate-only the claimed permit-token and execution-hash are output UNCONSUMED for a later verify-permit step. Denied, expired, revoked, timed-out, a refused claim, a claim with no execution hash (mandatory actions), or a permit that fails verification all fail closed.
     required: false
     default: 'false'
   max-wait-minutes:
@@ -102,7 +102,7 @@ inputs:
     description: 'JSON array of evaluation requests for batch mode, e.g. [{"action":"production.deploy","actor":"ignored","environment":"production"}]. Each production.deploy item requires environment and uses its own runtime-minted GitHub OIDC workload actor; caller actor and actor_identity values cannot authorize it. When set, single-eval inputs (action, actor, context) are ignored.'
     required: false
   wait-for-id:
-    description: 'Batch mode (evaluations input) only — NOT the single-eval path, see wait-for-approval for that. Approval request ID to block on until it reaches a terminal state (approved/denied/...). Polls the same GET /v1/approvals/{id} endpoint wait-for-approval uses.'
+    description: 'Batch mode (evaluations input) only — NOT the single-eval path, see wait-for-approval for that. Approval request ID to block on until it reaches a terminal state (approved/denied/...). Polls the same GET /v1-approvals/{id} endpoint wait-for-approval uses.'
     required: false
   wait-timeout-ms:
     description: 'Maximum milliseconds to wait for a terminal decision when wait-for-id is set (default: 600000 = 10 min; maximum: 3600000 = 60 min).'
@@ -492,7 +492,7 @@ outputs:
   verify-outcome:
     description: 'Coarse verification outcome from the last permit verification (verified / mismatch / expired / revoked / replay_blocked / invalid). Set on the single-eval and verify-permit (boundary) paths. Empty when verification did not run.'
   verify-error-code:
-    description: 'Precise runtime verify wire code when verification failed (e.g. PAYLOAD_MISMATCH, ENVIRONMENT_MISMATCH, PERMIT_EXPIRED, PERMIT_ALREADY_USED, MISSING_PERMIT). Empty on success. Lets a workflow distinguish WHY a permit was rejected.'
+    description: 'Precise runtime verify wire code when verification failed (e.g. PAYLOAD_MISMATCH, ENVIRONMENT_MISMATCH, PERMIT_EXPIRED, PERMIT_ALREADY_USED, MISSING_PERMIT). Empty on success. Lets a workflow distinguish WHY a permit was rejected. For admit-operation it is the runtime''s verify_error_code for a refused admission (nothing is consumed on a refusal), ADMISSION_REFUSED when the runtime named none, or ADMISSION_OUTCOME_UNKNOWN.'
   decisions:
     description: 'JSON array of per-item decision results for the batch path. Each item: {decision, verified, evaluationId, permitToken, reasons, verifyOutcome}.'
   batch-id:

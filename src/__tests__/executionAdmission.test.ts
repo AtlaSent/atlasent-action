@@ -87,6 +87,36 @@ describe("admitExecution", () => {
     expect(err.message).toContain("PERMIT_ALREADY_USED");
   });
 
+  it("carries the runtime's verify_error_code from the real refusal envelope", async () => {
+    // Shape of v1-consequential-operations' permit_verification_failed refusal
+    // (errorResponse: error, message, status, plus outcome/verify_error_code/reason).
+    const refusal = {
+      error: "permit_verification_failed",
+      message: "the presented permit did not verify (fail-closed; nothing was consumed or admitted)",
+      status: 403,
+      outcome: "deny",
+      verify_error_code: "PAYLOAD_MISMATCH",
+      reason: "payload hash does not match the permit",
+    };
+    const err = await admitExecution(admitArgs, { fetchImpl: fakeFetch(() => ({ status: 403, body: refusal }), []) }).catch((e) => e);
+    expect(err.verifyErrorCode).toBe("PAYLOAD_MISMATCH");
+    expect(err.outcomeUnknown).toBe(false);
+  });
+
+  it("does not take a non-code verify_error_code, and has none for an unknown outcome", async () => {
+    for (const verify_error_code of ["payload mismatch; rm -rf", "", 42, null]) {
+      const err = await admitExecution(admitArgs, {
+        fetchImpl: fakeFetch(() => ({ status: 403, body: { error: "permit_verification_failed", verify_error_code } }), []),
+      }).catch((e) => e);
+      expect(err.verifyErrorCode).toBeNull();
+    }
+    const unknown = await admitExecution(admitArgs, {
+      fetchImpl: fakeFetch(() => ({ status: 503, body: { error: "admission_outcome_unknown", verify_error_code: "PAYLOAD_MISMATCH" } }), []),
+    }).catch((e) => e);
+    expect(unknown.outcomeUnknown).toBe(true);
+    expect(unknown.verifyErrorCode).toBeNull();
+  });
+
   it("admission_outcome_unknown and transport loss are reported as UNKNOWN, never as refused-and-safe-to-retry", async () => {
     const e1 = await admitExecution(admitArgs, {
       fetchImpl: fakeFetch(() => ({ status: 503, body: { error_code: "admission_outcome_unknown" } }), []),

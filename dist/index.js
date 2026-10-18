@@ -3677,10 +3677,11 @@ var import_enforce14 = __toESM(require_dist());
 var GITHUB_API_DEFAULT2 = "https://api.github.com";
 var PAYLOAD_HASH_RE = /^[0-9a-f]{64}$/;
 var ExecutionAdmissionError = class extends Error {
-  constructor(message, httpStatus, outcomeUnknown = false) {
+  constructor(message, httpStatus, outcomeUnknown = false, verifyErrorCode = null) {
     super(message);
     this.httpStatus = httpStatus;
     this.outcomeUnknown = outcomeUnknown;
+    this.verifyErrorCode = verifyErrorCode;
     this.name = "ExecutionAdmissionError";
   }
 };
@@ -3689,6 +3690,14 @@ function admissionOperationKey(permitToken) {
 }
 function permitTokenHash(permitToken) {
   return (0, import_crypto.createHash)("sha256").update(permitToken).digest("hex");
+}
+function refusalVerifyErrorCode(text) {
+  try {
+    const code = JSON.parse(text)["verify_error_code"];
+    return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : null;
+  } catch {
+    return null;
+  }
 }
 function boundedDetail(text) {
   try {
@@ -3752,7 +3761,8 @@ async function admitExecution(args, deps = {}) {
     throw new ExecutionAdmissionError(
       `admission refused (HTTP ${response.status}): ${boundedDetail(text)}` + (unknown ? ` \u2014 the outcome is unknown; look up operation_key=${operationKey} before any retry` : ""),
       response.status,
-      unknown
+      unknown,
+      unknown ? null : refusalVerifyErrorCode(text)
     );
   }
   let parsed;
@@ -4497,7 +4507,10 @@ async function runAdmitOperationStep(apiKey, apiUrl) {
   } catch (error) {
     const e = error instanceof ExecutionAdmissionError ? error : null;
     setOutput("admission-outcome-unknown", e?.outcomeUnknown ? "true" : "false");
-    fail(e?.outcomeUnknown ? "ADMISSION_OUTCOME_UNKNOWN" : "ADMISSION_REFUSED", error instanceof Error ? error.message : String(error));
+    fail(
+      e?.outcomeUnknown ? "ADMISSION_OUTCOME_UNKNOWN" : e?.verifyErrorCode ?? "ADMISSION_REFUSED",
+      error instanceof Error ? error.message : String(error)
+    );
   }
 }
 async function runEstablishEffectStep(apiKey, apiUrl) {

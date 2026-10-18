@@ -43,6 +43,9 @@ export class ExecutionAdmissionError extends Error {
     readonly httpStatus: number | null,
     /** True when the admission may have committed with the response lost. */
     readonly outcomeUnknown = false,
+    /** The runtime's verify_error_code for a refused admission (PAYLOAD_MISMATCH,
+     *  ENVIRONMENT_MISMATCH, PERMIT_ALREADY_USED, ...), when it sent one. */
+    readonly verifyErrorCode: string | null = null,
   ) {
     super(message);
     this.name = "ExecutionAdmissionError";
@@ -85,6 +88,16 @@ export interface AdmitResult {
 
 interface Deps {
   fetchImpl?: typeof fetch;
+}
+
+/** The runtime's verify_error_code from a refusal body, if it is a plain code. */
+function refusalVerifyErrorCode(text: string): string | null {
+  try {
+    const code = (JSON.parse(text) as Record<string, unknown>)["verify_error_code"];
+    return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : null;
+  } catch {
+    return null;
+  }
 }
 
 function boundedDetail(text: string): string {
@@ -156,6 +169,7 @@ export async function admitExecution(args: AdmitArgs, deps: Deps = {}): Promise<
         (unknown ? ` — the outcome is unknown; look up operation_key=${operationKey} before any retry` : ""),
       response.status,
       unknown,
+      unknown ? null : refusalVerifyErrorCode(text),
     );
   }
   let parsed: Record<string, unknown>;
