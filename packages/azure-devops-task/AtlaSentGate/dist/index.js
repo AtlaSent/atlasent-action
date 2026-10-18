@@ -7644,7 +7644,7 @@ var require_dist = __commonJS({
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
     async function claimApprovalPermit(config, apiUrl, row) {
-      const url = `${apiUrl}/v1/approvals/${encodeURIComponent(config.approvalId)}/claim-permit`;
+      const url = `${apiUrl}/v1-approvals/${encodeURIComponent(config.approvalId)}/claim-permit`;
       let requestBody = "{}";
       if (config.buildClaimBody) {
         let built;
@@ -7694,7 +7694,7 @@ var require_dist = __commonJS({
         throw new EnforceError2("Cannot wait for approval: no approvalRequestId on the hold/escalate decision", "evaluate");
       }
       const apiUrl = (config.apiUrl ?? DEFAULT_API_URL).replace(/\/$/, "");
-      const url = `${apiUrl}/v1/approvals/${encodeURIComponent(config.approvalId)}`;
+      const url = `${apiUrl}/v1-approvals/${encodeURIComponent(config.approvalId)}`;
       const deadline = Date.now() + config.maxWaitMs;
       while (Date.now() < deadline) {
         let status;

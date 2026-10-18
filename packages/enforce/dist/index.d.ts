@@ -214,7 +214,7 @@ export interface Decision {
     escalation_id?: string;
     /**
      * Present on hold/escalate decisions that create a linked approval_requests
-     * row (see v1-evaluate/handler.ts). Poll GET /v1/approvals/{id} — via
+     * row (see v1-evaluate/handler.ts). Poll GET /v1-approvals/{id} — via
      * waitForApprovalResolution() below — for the human resolution and, on
      * approve, the fresh re-evaluation permit token.
      */
@@ -285,7 +285,7 @@ export interface WaitForApprovalConfig extends FunctionRegionOption {
     /** Bounded wait — required, no default. Exceeding it throws (fail closed). */
     maxWaitMs: number;
     /**
-     * Builds the POST /v1/approvals/{id}/claim-permit body, called once, at
+     * Builds the POST /v1-approvals/{id}/claim-permit body, called once, at
      * claim time (never earlier — a short-lived actor_identity.v1 minted at
      * evaluate time may have expired while a human was deciding).
      *

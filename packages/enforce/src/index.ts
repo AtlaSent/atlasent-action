@@ -231,7 +231,7 @@ export interface Decision {
   escalation_id?: string;
   /**
    * Present on hold/escalate decisions that create a linked approval_requests
-   * row (see v1-evaluate/handler.ts). Poll GET /v1/approvals/{id} — via
+   * row (see v1-evaluate/handler.ts). Poll GET /v1-approvals/{id} — via
    * waitForApprovalResolution() below — for the human resolution and, on
    * approve, the fresh re-evaluation permit token.
    */
@@ -473,12 +473,12 @@ export function verify(decision: Decision): void {
 // Step 2b — waitForApprovalResolution (pause-and-resume approval protocol)
 //
 // For a hold/escalate decision that carries approvalRequestId (see
-// mapDecision below), poll GET /v1/approvals/{id} on the runtime API —
+// mapDecision below), poll GET /v1-approvals/{id} on the runtime API —
 // atlasent-api's v1-approvals endpoint — on a bounded interval/timeout for
 // the human resolution. That status poll never carries the raw permit token
 // (server-side redesign: a broadly-row-readable table must not hand one out
 // off a plain GET) — on "approved" this function makes one further call,
-// POST /v1/approvals/{id}/claim-permit, an atomic one-time claim (see
+// POST /v1-approvals/{id}/claim-permit, an atomic one-time claim (see
 // claimApprovalPermit above). Returns only on a terminal, non-"pending"
 // status:
 //   - status "approved" / "approved_awaiting_claim": the caller should verify the returned permitToken
@@ -507,7 +507,7 @@ export interface WaitForApprovalConfig extends FunctionRegionOption {
   /** Bounded wait — required, no default. Exceeding it throws (fail closed). */
   maxWaitMs: number;
   /**
-   * Builds the POST /v1/approvals/{id}/claim-permit body, called once, at
+   * Builds the POST /v1-approvals/{id}/claim-permit body, called once, at
    * claim time (never earlier — a short-lived actor_identity.v1 minted at
    * evaluate time may have expired while a human was deciding).
    *
@@ -600,7 +600,7 @@ async function claimApprovalPermit(
     "permitToken" | "executionHashExpected" | "claimFailure" | "reEvaluationDecision" | "reEvaluationId"
   >
 > {
-  const url = `${apiUrl}/v1/approvals/${encodeURIComponent(config.approvalId)}/claim-permit`;
+  const url = `${apiUrl}/v1-approvals/${encodeURIComponent(config.approvalId)}/claim-permit`;
   let requestBody = "{}";
   if (config.buildClaimBody) {
     let built: Record<string, unknown>;
@@ -660,7 +660,7 @@ export async function waitForApprovalResolution(
     );
   }
   const apiUrl = (config.apiUrl ?? DEFAULT_API_URL).replace(/\/$/, "");
-  const url = `${apiUrl}/v1/approvals/${encodeURIComponent(config.approvalId)}`;
+  const url = `${apiUrl}/v1-approvals/${encodeURIComponent(config.approvalId)}`;
   const deadline = Date.now() + config.maxWaitMs;
 
   while (Date.now() < deadline) {

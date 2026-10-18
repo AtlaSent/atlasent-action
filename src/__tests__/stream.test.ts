@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 // Tests for waitForTerminalDecision() — the compatibility shim over
 // @atlasent/enforce's waitForApprovalResolution(), the canonical
-// pause-and-resume approval poll (GET /v1/approvals/:id). Prior versions of
+// pause-and-resume approval poll (GET /v1-approvals/:id). Prior versions of
 // this suite tested a since-removed implementation that polled/streamed
 // /v1-evaluate — an endpoint that never existed server-side (see stream.ts's
 // header comment). This suite verifies the shim's bridging logic only; the
