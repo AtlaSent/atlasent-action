@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock @atlasent/enforce so tests exercise gate.ts's own control flow
 // without any real network call, matching the mocking pattern already used
@@ -19,6 +19,7 @@ vi.mock("@atlasent/enforce", async (importOriginal) => {
 
 import { evaluate, verifyPermit, reverifyPermit, waitForApprovalResolution, EnforceError } from "@atlasent/enforce";
 import type { Decision } from "@atlasent/enforce";
+import { admissionOperationKey } from "../azureOperation";
 import {
   GateInputError,
   emptyOutputs,
@@ -638,18 +639,208 @@ describe("Azure scope binding", () => {
     expect(parseInputs(baseEnv(own)).context.azure_devops).toEqual({ note: "caller" });
   });
 
-  it("presents the same Azure scope to evaluate and to the execution-boundary verify", async () => {
-    const scope = { azureSubscriptionIdRaw: SUB, azureResourceGroupRaw: "rg-prod" };
+  it("refuses a plain consuming verify or enforce for an Azure scope, before any call", async () => {
+    const scope = { azureSubscriptionIdRaw: SUB, azureResourceGroupRaw: "rg-prod", azureDeploymentNameRaw: "web-1" };
+    for (const extra of [{ verifyPermitRaw: "true", permitTokenRaw: "pt-1" }, {}, { modeRaw: "enforce" }]) {
+      const r = await runGate(parseInputs(baseEnv({ ...scope, ...extra })), nullLogger);
+      expect(r.ok).toBe(false);
+      expect(r.outputs.verified).toBe("false");
+      expect(r.message).toMatch(/admit-operation/);
+    }
+    expect(mockEvaluate).not.toHaveBeenCalled();
+    expect(mockVerifyPermit).not.toHaveBeenCalled();
+    expect(mockReverifyPermit).not.toHaveBeenCalled();
+  });
+
+  it("evaluate-only outputs the runtime's executionHash for admission", async () => {
+    const scope = { azureSubscriptionIdRaw: SUB, azureResourceGroupRaw: "rg-prod", azureDeploymentNameRaw: "web-1" };
+    mockEvaluate.mockResolvedValueOnce(allowDecision({ executionHashExpected: "b".repeat(64) }));
+    const r = await runGate(parseInputs(baseEnv({ ...scope, modeRaw: "evaluate-only" })), nullLogger);
+    expect(r.ok).toBe(true);
+    expect(r.outputs.verified).toBe("false");
+    expect(r.outputs.executionHash).toBe("b".repeat(64));
+    expect(mockVerifyPermit).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Azure Production Change Gate, Slice 3: admit-operation / establish-effect
+// ---------------------------------------------------------------------------
+
+describe("Azure Consequential Operation modes", () => {
+  const SUB = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const OP = "11111111-1111-4111-8111-111111111111";
+  const AT = "22222222-2222-4222-8222-222222222222";
+  const OBS = "33333333-3333-4333-8333-333333333333";
+  const CORR = "44444444-4444-4444-8444-444444444444";
+  const HASH = "c".repeat(64);
+  const scope = { azureSubscriptionIdRaw: SUB, azureResourceGroupRaw: "RG-Prod", azureDeploymentNameRaw: "web-1" };
+  const admitEnv = (o: Partial<RawGateEnv> = {}) =>
+    baseEnv({ ...scope, modeRaw: "admit-operation", permitTokenRaw: "pt-1", executionHashRaw: HASH, targetId: "web", ...o });
+  const establishEnv = (o: Partial<RawGateEnv> = {}) =>
+    baseEnv({ ...scope, modeRaw: "establish-effect", operationIdRaw: OP, attemptIdRaw: AT, evaluationIdRaw: "req-1", correlationIdRaw: CORR, ...o });
+
+  let calls: Array<{ url: string; body: Record<string, unknown> }>;
+  let queue: Array<{ status: number; body: unknown }>;
+  beforeEach(() => {
+    calls = [];
+    queue = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ url, body: JSON.parse(String(init.body)) });
+      const next = queue.shift();
+      if (!next) throw new Error("unexpected fetch");
+      return new Response(JSON.stringify(next.body), { status: next.status });
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("refuses an unknown mode instead of defaulting to a consuming enforce", () => {
+    expect(() => parseInputs(baseEnv({ modeRaw: "admit-operations" }))).toThrow(/Unknown mode/);
+  });
+
+  it("admit-operation requires the permit, executionHash, targetId and a named ARM deployment", () => {
+    expect(() => parseInputs(admitEnv({ permitTokenRaw: "" }))).toThrow(/permitToken/);
+    expect(() => parseInputs(admitEnv({ executionHashRaw: "" }))).toThrow(/executionHash/);
+    expect(() => parseInputs(admitEnv({ executionHashRaw: "sha256:" + HASH }))).toThrow(/executionHash/);
+    expect(() => parseInputs(admitEnv({ targetId: "" }))).toThrow(/targetId/);
+    expect(() => parseInputs(admitEnv({ azureDeploymentNameRaw: "" }))).toThrow(/azureDeploymentName/);
+    expect(() => parseInputs(admitEnv({ azureSubscriptionIdRaw: "", azureResourceGroupRaw: "", azureDeploymentNameRaw: "" }))).toThrow(
+      /azureDeploymentName/,
+    );
+  });
+
+  it("admit-operation presents the same Azure locus evaluate bound, and outputs the operation", async () => {
     mockEvaluate.mockResolvedValueOnce(allowDecision());
     await runGate(parseInputs(baseEnv({ ...scope, modeRaw: "evaluate-only" })), nullLogger);
-    const evaluated = mockEvaluate.mock.calls[mockEvaluate.mock.calls.length - 1][0];
+    const evaluated = mockEvaluate.mock.calls[0][0];
 
-    mockReverifyPermit.mockResolvedValueOnce({ verified: true, outcome: "verified" });
-    await runGate(
-      parseInputs(baseEnv({ ...scope, verifyPermitRaw: "true", permitTokenRaw: "pt-1" })),
-      nullLogger,
-    );
-    const reverified = mockReverifyPermit.mock.calls[mockReverifyPermit.mock.calls.length - 1][0];
-    expect(reverified.context.azure).toEqual(evaluated.context.azure);
+    queue.push({ status: 200, body: { operation_id: OP, attempt_id: AT } });
+    const r = await runGate(parseInputs(admitEnv()), nullLogger);
+    expect(r.ok).toBe(true);
+    expect(r.outputs).toMatchObject({ verified: "true", operationId: OP, attemptId: AT, executionHash: HASH });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toMatch(/\/v1-consequential-operations\/consume-and-admit$/);
+    expect(calls[0].body).toMatchObject({ provider: "azure", payload_hash: HASH, target_id: "web", permit_token: "pt-1" });
+    expect(calls[0].body.context).toEqual({
+      azure: { subscription_id: evaluated.context.azure.subscription_id, resource_group: evaluated.context.azure.resource_group },
+    });
+    expect(mockVerifyPermit).not.toHaveBeenCalled();
+    expect(mockReverifyPermit).not.toHaveBeenCalled();
+  });
+
+  it("admit-operation fails closed on a refusal and flags an unknown outcome", async () => {
+    queue.push({ status: 403, body: { error: "permit_verification_failed", verify_error_code: "PAYLOAD_MISMATCH" } });
+    const refused = await runGate(parseInputs(admitEnv()), nullLogger);
+    expect(refused.ok).toBe(false);
+    expect(refused.outputs.verified).toBe("false");
+    expect(refused.outputs.operationId).toBe("");
+    expect(refused.message).toMatch(/PAYLOAD_MISMATCH/);
+    expect(refused.message).toMatch(/refused/);
+    expect(refused.message).toMatch(/Do not run the deployment/);
+    expect(refused.outputs.admissionOutcomeUnknown).toBe("false");
+    expect(refused.outputs.operationKey).toBe(admissionOperationKey("pt-1"));
+
+    queue.push({ status: 503, body: { error: "admission_outcome_unknown" } });
+    const unknown = await runGate(parseInputs(admitEnv()), nullLogger);
+    expect(unknown.ok).toBe(false);
+    expect(unknown.outputs.admissionOutcomeUnknown).toBe("true");
+    // The operator reconciles by the key: it is in the output and the message,
+    // the permit never is, and the message does not call it a refusal.
+    expect(unknown.outputs.operationKey).toBe(admissionOperationKey("pt-1"));
+    expect(unknown.message).toContain(`operation_key=${admissionOperationKey("pt-1")}`);
+    expect(unknown.message).toMatch(/UNKNOWN/);
+    expect(unknown.message).not.toMatch(/refused/);
+    expect(unknown.message).not.toContain("pt-1");
+  });
+
+  it("establish-effect: verify in the Activity Log, then establish, and succeed only on the runtime's answer", async () => {
+    queue.push({ status: 201, body: { observation: { id: OBS, outcome: "verified", operation_bound: true } } });
+    queue.push({ status: 200, body: { state: "succeeded", effect_establishment: { verdict: "established" } } });
+    const r = await runGate(parseInputs(establishEnv()), nullLogger);
+    expect(r.ok).toBe(true);
+    expect(r.outputs).toMatchObject({ effectEstablished: "true", effectState: "succeeded", azureObservationId: OBS });
+    expect(calls.map((c) => c.url.replace(/^.*\/functions\/v1/, ""))).toEqual([
+      "/v1-azure-effect-verify",
+      "/v1-consequential-operations/establish-effect",
+    ]);
+    expect(calls[0].body).toMatchObject({ request_id: "req-1", correlation_id: CORR });
+    expect(calls[1].body).toEqual({ operation_id: OP, attempt_id: AT, azure_observation_id: OBS });
+  });
+
+  it("establish-effect: an unbound observation never reaches establish-effect", async () => {
+    queue.push({ status: 201, body: { observation: { id: OBS, outcome: "verified", operation_bound: false } } });
+    const r = await runGate(parseInputs(establishEnv()), nullLogger);
+    expect(r.ok).toBe(false);
+    expect(r.outputs.effectEstablished).toBe("false");
+    expect(r.message).toMatch(/NOT verified/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("establish-effect: a mismatch is handed to the runtime to record, and the step fails even if it answers established", async () => {
+    for (const runtime of [
+      { status: 200, body: { state: "failed", effect_establishment: { verdict: "mismatch", reason: "azure_operation_failed" } } },
+      { status: 200, body: { state: "succeeded", effect_establishment: { verdict: "established" } } },
+    ]) {
+      calls = [];
+      queue.push({ status: 201, body: { observation: { id: OBS, outcome: "mismatch", operation_bound: true, reasons: ["failed"] } } });
+      queue.push(runtime);
+      const r = await runGate(parseInputs(establishEnv()), nullLogger);
+      expect(r.ok).toBe(false);
+      expect(r.outputs.effectEstablished).toBe("false");
+      expect(r.message).toMatch(/does not match/);
+      expect(calls.map((c) => c.url.replace(/^.*\/functions\/v1/, ""))).toEqual([
+        "/v1-azure-effect-verify",
+        "/v1-consequential-operations/establish-effect",
+      ]);
+      expect(calls[1].body).toEqual({ operation_id: OP, attempt_id: AT, azure_observation_id: OBS });
+    }
+  });
+
+  it("establish-effect: a runtime refusal fails the step with its reason", async () => {
+    queue.push({ status: 201, body: { observation: { id: OBS, outcome: "verified", operation_bound: true } } });
+    queue.push({
+      status: 409,
+      body: { error: "effect_observation_not_admitted", effect_establishment: { verdict: "mismatch", reason: "azure_correlation_has_mismatch_observation" } },
+    });
+    const r = await runGate(parseInputs(establishEnv()), nullLogger);
+    expect(r.ok).toBe(false);
+    expect(r.outputs.effectEstablished).toBe("false");
+    expect(r.message).toMatch(/azure_correlation_has_mismatch_observation/);
+  });
+
+  it("establish-effect: a failed or cancelled deployment step is recorded as unknown, never failure, and fails the step", async () => {
+    for (const reported of ["Failed", "failed", "Canceled", "Skipped"]) {
+      calls = [];
+      queue.push({ status: 200, body: { state: "submitting" } });
+      const r = await runGate(parseInputs(establishEnv({ deploymentOutcomeRaw: reported, correlationIdRaw: "" })), nullLogger);
+      expect(r.ok).toBe(false);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toMatch(/\/record-attempt$/);
+      expect(calls[0].body.outcome).toBe("unknown");
+      expect(r.message).toMatch(/recorded as unknown/);
+      expect(r.message).toContain(`operation_id=${OP} attempt_id=${AT}`);
+    }
+  });
+
+  it("establish-effect: claims the outcome recorded only on HTTP 200, else names the ids for recovery", async () => {
+    for (const status of [201, 409, 500]) {
+      queue.push({ status, body: {} });
+      const r = await runGate(parseInputs(establishEnv({ deploymentOutcomeRaw: "Failed" })), nullLogger);
+      expect(r.ok).toBe(false);
+      expect(r.message).toMatch(/FAILED/);
+      expect(r.message).not.toMatch(/recorded as unknown \(/);
+      expect(r.message).toContain(`operation_id=${OP} attempt_id=${AT}`);
+      expect(r.outputs.effectState).toBe(`record_attempt_http_${status}`);
+    }
+  });
+
+  it("establish-effect requires operation/attempt ids, and evaluationId + correlationId when it succeeded", () => {
+    expect(() => parseInputs(establishEnv({ operationIdRaw: "op-1" }))).toThrow(/operationId/);
+    expect(() => parseInputs(establishEnv({ attemptIdRaw: "" }))).toThrow(/attemptId/);
+    expect(() => parseInputs(establishEnv({ evaluationIdRaw: "" }))).toThrow(/evaluationId/);
+    expect(() => parseInputs(establishEnv({ correlationIdRaw: "not-a-guid" }))).toThrow(/correlationId/);
+    expect(() => parseInputs(establishEnv({ deploymentOutcomeRaw: "failed", correlationIdRaw: "", evaluationIdRaw: "" }))).not.toThrow();
   });
 });

@@ -4,6 +4,29 @@ All notable changes to `atlasent-action` are documented here.
 
 ## [Unreleased]
 
+### Added: Azure DevOps task closes Azure Consequential Operations
+
+The unpublished `AtlaSentGate` Azure Pipelines task (task version 1.3.0) has
+two new modes for an Azure-scoped deployment
+([packages/azure-devops-task/README.md](packages/azure-devops-task/README.md#protecting-an-azure-deployment)):
+
+- `mode: admit-operation` calls `v1-consequential-operations/consume-and-admit`
+  with `provider: "azure"` and `context.azure`, consuming the evaluate-only
+  permit and admitting an operation + attempt in one transaction, before the
+  deployment runs.
+- `mode: establish-effect` calls `v1-azure-effect-verify` with the
+  deployment's correlation id, then `establish-effect` with the recorded
+  observation. It succeeds only when the runtime answers established. A
+  mismatch is handed to the runtime (which records a definitive one as
+  failure) and fails the step; an unbound or unknown observation fails it. A
+  deployment the pipeline reports as failed or cancelled is recorded as
+  `unknown`, never `failure`.
+
+`mode: enforce` and `verifyPermit: true` are now refused for an Azure scope,
+and an unrecognized `mode` fails the step instead of defaulting to `enforce`.
+`evaluate-only` now outputs `executionHash`. Requires atlasent-api's Azure
+effect close-out on the target runtime.
+
 ### Fixed: `wait-for-approval` polls and claims at `/v1-approvals`
 
 The HOLD wait polled `GET {api}/v1/approvals/{id}` and claimed at

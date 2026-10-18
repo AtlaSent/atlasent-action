@@ -88,14 +88,20 @@ does with `secrets.*` — an explicit `env:` block on the step is required):
 | `environment` | auto | When blank: inferred from the `ATLASENT_API_KEY` prefix (`ask_test_`/`ask_live_`), else from `Build.SourceBranch` (`main`/`master` → `live`, otherwise `test`) — the same heuristic the GitHub Action applies to `github.ref`. |
 | `azureSubscriptionId` | — | The Azure subscription this step will change. Give it together with `azureResourceGroup`. Bound into the evaluate context as `context.azure`, signed into the permit, and re-checked when the permit is verified — so give the **same values on the `verifyPermit: true` step**. |
 | `azureResourceGroup` | — | The resource group this step will change. See [Protecting an Azure deployment](#protecting-an-azure-deployment). |
-| `azureDeploymentName` | — | Optional, recommended. The ARM deployment name the deploy will use; requires the subscription and resource group. Only that deployment can verify the decision's effect. |
+| `azureDeploymentName` | — | The ARM deployment name the deploy will use; requires the subscription and resource group. Required for `mode: admit-operation`: only that deployment can establish the decision's effect. |
 | `context` | `{}` | JSON object of additional context passed to the evaluator. | The task also records this run's Azure DevOps metadata (`System.CollectionUri`, `System.TeamProject`, `Build.DefinitionName`, `Build.BuildId`, `Build.Repository.Name`, `Build.SourceVersion`) as `context.azure_devops`, unless `context` already sets that key. That metadata is the pipeline's own description of itself: it is recorded for audit and correlation and grants nothing.
 | `approvalsFrom` | `none` | `none` or `pr-reviews`. **`pr-reviews` is accepted but not yet implemented** — Azure Repos pull request reviews are not auto-derived in this v1 task; a warning is logged and the call proceeds as `none`. Pass `context: '{"approvals": N}'` explicitly if your policy requires an approval count. |
 | `waitForApproval` | `false` | Set `true` to pause on hold/escalate and resume once a human resolves it, instead of failing immediately. Ignored in `mode: evaluate-only`. |
 | `maxWaitMinutes` | `30` | Bound on `waitForApproval`'s poll window; exceeding it fails closed. |
-| `mode` | `enforce` | `enforce` (evaluate + verify + consume in one step) or `evaluate-only` (issue a permit without consuming it — see the execution-boundary pattern below). Ignored when `verifyPermit: true`. |
-| `verifyPermit` | `false` | Set `true` to run this task step as an execution-boundary re-verify instead of an evaluate. Requires `permitToken`. |
-| `permitToken` | — | Required when `verifyPermit: true`: the `permitToken` output from an earlier `mode: evaluate-only` step. |
+| `mode` | `enforce` | `enforce` (evaluate + verify + consume in one step), `evaluate-only` (issue a permit without consuming it — see the execution-boundary pattern below), or, for an Azure deployment, `admit-operation` / `establish-effect` (see [Protecting an Azure deployment](#protecting-an-azure-deployment)). An unrecognized value fails the step. `enforce` is refused for an Azure scope. Ignored when `verifyPermit: true`. |
+| `verifyPermit` | `false` | Set `true` to run this task step as an execution-boundary re-verify instead of an evaluate. Requires `permitToken`. Refused for an Azure scope (use `mode: admit-operation`). |
+| `executionHash` | — | `mode: admit-operation`: the `executionHash` output of the evaluate-only step, passed unchanged. |
+| `operationId` / `attemptId` | — | `mode: establish-effect`: the outputs of the admit-operation step. |
+| `evaluationId` | — | `mode: establish-effect`: the `evaluationId` output of the evaluate-only step. |
+| `correlationId` | — | `mode: establish-effect`: the ARM deployment's correlation id. Required when the deployment succeeded. |
+| `deploymentOutcome` | `succeeded` | `mode: establish-effect`: `succeeded`, `failed` or `unknown` (`Agent.JobStatus` values accepted). Anything but succeeded is recorded as `unknown` (a pipeline step status is not Azure evidence of failure) and fails the step. |
+| `effectWaitMinutes` | `15` | `mode: establish-effect`: how long to wait for the deployment to appear in Azure's Activity Log (max 120). |
+| `permitToken` | — | Required when `verifyPermit: true` or `mode: admit-operation`: the `permitToken` output from an earlier `mode: evaluate-only` step. |
 | `apiUrl` | — | Overrides `ATLASENT_BASE_URL`. |
 
 ## Outputs
@@ -115,6 +121,11 @@ output variable per Azure Pipelines' own
 | `riskScore` | Numeric risk score 0–100; empty string when not assessed. |
 | `evaluationId` | Unique evaluation ID for the audit trail. |
 | `waitedForApproval` | `"true"` when a hold/escalate decision was paused and waited on for a human resolution. |
+| `executionHash` | The payload binding the runtime put in the permit. Pass it to `mode: admit-operation`. |
+| `operationId` / `attemptId` / `operationKey` | `mode: admit-operation`: the admitted operation (the key is a digest of the permit, never the permit). |
+| `admissionOutcomeUnknown` | `"true"` when admission may have committed with the response lost. |
+| `azureObservationId` / `effectState` | `mode: establish-effect`: the recorded Activity Log observation and the operation state the runtime reported. |
+| `effectEstablished` | `"true"` only when the runtime established the deployment's effect. |
 
 ## Pause-and-resume: wait for a human decision
 
@@ -209,24 +220,60 @@ caller's job" pattern the top-level README documents for the GitHub Action.
 
 The Azure Production Change Gate
 (the internal plan)
-uses three pieces in one pipeline:
+runs an Azure deployment as a **Consequential Operation**: AtlaSent records
+that the permit was spent on exactly this deployment, then closes the
+operation only from Azure's own Activity Log. Four steps, one pipeline:
 
-1. **Before the change** — this task in `mode: evaluate-only` with
-   `azureSubscriptionId` / `azureResourceGroup`. The Azure scope is signed
-   into the permit. Also give `azureDeploymentName`, the ARM deployment name
-   the deploy step will use (recommended): AtlaSent stores it with the
-   decision, and only that deployment can verify the decision in step 3.
-2. **At the change** — this task with `verifyPermit: true` and the **same**
-   Azure scope, immediately before the deploy. A permit issued for one
-   subscription or resource group fails closed against another
-   (`AZURE_LOCUS_MISMATCH`).
-3. **After the change** — a call to `v1-azure-effect-verify` with the
-   decision's `evaluationId` and the Azure operation's correlation id.
-   AtlaSent reads Azure's Activity Log itself and records `verified`,
-   `mismatch` or `unknown`. The response's `operation_bound` is `true` only
-   when step 1 named the deployment; without it, `verified` proves an
-   operation in the authorized scope, not that it was this decision's. This requires the org's Azure connection for the
-   subscription to be `connected` with this resource group selected.
+1. **Before the change** — `mode: evaluate-only` with `azureSubscriptionId`,
+   `azureResourceGroup` and `azureDeploymentName` (the ARM deployment name
+   the deploy step will use). The Azure scope is signed into the permit and
+   the deployment name is stored with the decision. Outputs `permitToken`,
+   `executionHash` and `evaluationId`.
+2. **Immediately before the change** — `mode: admit-operation` with the
+   **same** Azure scope, `targetId`, `permitToken` and `executionHash`. This
+   calls `v1-consequential-operations/consume-and-admit` with
+   `provider: "azure"`: the runtime verifies the permit without consuming it,
+   then consumes it **and** admits an operation and attempt in one
+   transaction. A permit issued for another subscription or resource group
+   is refused (`AZURE_LOCUS_MISMATCH`) and stays unspent. Outputs
+   `operationId` / `attemptId`. Run the deployment only if this step
+   succeeded (`admit.verified == 'true'`).
+3. **The change** — the ARM deployment, under exactly `azureDeploymentName`,
+   exporting its correlation id.
+4. **After the change** — `mode: establish-effect` with `operationId`,
+   `attemptId`, `evaluationId`, the deployment's `correlationId` and
+   `deploymentOutcome`. AtlaSent reads Azure's Activity Log itself
+   (`v1-azure-effect-verify`, polling while the event has not appeared, up to
+   `effectWaitMinutes`) and records an observation; the task then calls
+   `establish-effect` with that observation and the runtime decides. The step
+   succeeds only when the runtime answers `succeeded` / `established`. A
+   `mismatch` observation is handed to `establish-effect` too, so the runtime
+   can record a definitive mismatch as failure; the step fails either way. An
+   observation not bound to the named deployment, an `unknown` past the wait
+   budget, or any refusal fails the step and leaves the operation open.
+   A deployment the pipeline reports as failed or cancelled is recorded on
+   the attempt as `unknown`, never `failure`: a failed
+   `az deployment group create` does not prove Azure rejected the deployment,
+   and only the runtime records a definitive failure, from Azure evidence.
+   The step fails, and if that record is not accepted (HTTP 200) the error
+   names the `operationId` / `attemptId` to reconcile.
+
+If `admit-operation` fails, its error names the `operationKey` (a digest of
+the permit, also set as an output) and says whether the admission was
+**refused** (nothing consumed) or its outcome is **unknown** (it may have
+committed: reconcile by that key before retrying or minting a fresh permit).
+
+`mode: enforce` and `verifyPermit: true` are **refused** for an Azure scope:
+a plain consuming verify spends the permit with no operation for the
+deployment's effect to close.
+
+Requirements: the org's Azure connection for the subscription must be
+`connected` with this resource group selected, and the pipeline's API key
+needs `evaluate:write`, `verify:execute`, `consequential_operations:write`
+and `azure_effect:verify`. Effect establishment for provider `azure` needs
+atlasent-api's Azure effect close-out (`establish-effect` with
+`azure_observation_id`, migration `20261680000000`) deployed on the runtime
+the pipeline targets.
 
 ```yaml
 variables:
@@ -260,10 +307,11 @@ stages:
       - job: DeployJob
         variables:
           permitToken: $[ stageDependencies.Authorize.Gate.outputs['gate.permitToken'] ]
+          executionHash: $[ stageDependencies.Authorize.Gate.outputs['gate.executionHash'] ]
           evaluationId: $[ stageDependencies.Authorize.Gate.outputs['gate.evaluationId'] ]
         steps:
           - task: AtlaSentGate@1
-            name: verify
+            name: admit
             env:
               ATLASENT_API_KEY: $(AtlasentApiKey)
               ATLASENT_BASE_URL: $(AtlasentBaseUrl)
@@ -271,14 +319,16 @@ stages:
               action: production.deploy
               targetId: web-app
               environment: production
-              verifyPermit: true
+              mode: admit-operation
               permitToken: $(permitToken)
+              executionHash: $(executionHash)
               azureSubscriptionId: $(subscriptionId)
               azureResourceGroup: $(resourceGroup)
+              azureDeploymentName: $(deploymentName)
 
           - task: AzureCLI@2
             name: deploy
-            condition: eq(variables['verify.verified'], 'true')
+            condition: and(succeeded(), eq(variables['admit.verified'], 'true'))
             inputs:
               azureSubscription: prod-service-connection
               scriptType: bash
@@ -289,18 +339,30 @@ stages:
                   --name "$(deploymentName)" --template-file main.bicep --query properties.correlationId -o tsv)
                 echo "##vso[task.setvariable variable=correlationId;isOutput=true]$corr"
 
-          - bash: |
-              set -euo pipefail
-              # Activity Log delivery can lag by minutes; an `unknown` result
-              # is recorded and can be re-requested, it is never treated as success.
-              curl -sS --fail-with-body -X POST "$ATLASENT_BASE_URL/v1-azure-effect-verify" \
-                -H "Authorization: Bearer $ATLASENT_API_KEY" -H "Content-Type: application/json" \
-                -d "{\"request_id\": \"$(evaluationId)\", \"operation_name\": \"Microsoft.Resources/deployments/write\", \"correlation_id\": \"$(deploy.correlationId)\"}"
-            displayName: Verify the effect against Azure's Activity Log
+          # Runs whenever an operation was admitted, including after a failed
+          # deploy, so the attempt is always reported. Agent.JobStatus is
+          # Failed if the deploy step failed.
+          - task: AtlaSentGate@1
+            name: effect
+            condition: and(always(), ne(variables['admit.operationId'], ''))
             env:
               ATLASENT_API_KEY: $(AtlasentApiKey)
               ATLASENT_BASE_URL: $(AtlasentBaseUrl)
+            inputs:
+              action: production.deploy
+              environment: production
+              mode: establish-effect
+              operationId: $(admit.operationId)
+              attemptId: $(admit.attemptId)
+              evaluationId: $(evaluationId)
+              correlationId: $(deploy.correlationId)
+              deploymentOutcome: $(Agent.JobStatus)
 ```
+
+If `admit-operation` fails with `admissionOutcomeUnknown: true`, the
+admission may have committed with the response lost: do not deploy and do not
+mint a fresh permit until the operation has been looked up by its
+`operationKey`.
 
 The effect check is evidence, recorded after the fact. It does not undo a
 change; what stops an unauthorized change is steps 1–2.
