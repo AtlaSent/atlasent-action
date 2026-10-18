@@ -6,7 +6,9 @@ permit, the permit is spent at the execution boundary, and AtlaSent decides
 from GitHub's own records whether the authorized deploy actually happened.
 
 Every step below is this action. There is no curl and no hand-written
-evidence.
+evidence. `admit-operation`, `establish-effect` and the Change Brief evaluate
+inputs need atlasent-action **v1.10.0 or later** (what `@v1` resolves to once
+that release is tagged).
 
 ```
 change brief ─▶ evaluate (HOLD) ─▶ human approves in AtlaSent ─▶ claim + reevaluate ─▶ permit
@@ -27,9 +29,9 @@ be skipped by the workflow.
 
 | Prerequisite | Why |
 |---|---|
-| An AtlaSent API key with `evaluate:write`, `verify:execute`, `idp_broker:mint`, `approvals:read`, `change_brief:create`, `consequential_operations:write` | evaluate, claim, admission and establishment each check their own scope |
+| An AtlaSent API key with `evaluate:write`, `verify:execute`, `idp_broker:mint`, `approvals:read`, `change_brief:read`, `consequential_operations:write` (plus `approval_artifact:mint` if the action class requires human approval) | evaluate, claim, admission and establishment each check their own scope. `change_brief:create` is not enough: it is for agent-bound keys only, and a CI key is not one |
 | The AtlaSent GitHub App installed on the repository and the repository bound in AtlaSent | the runtime reads the run, deployment and status itself through the App; without it the effect can only be `unknown` |
-| A workload binding for this workflow file (GitHub OIDC) | `production.deploy` refuses a caller-asserted actor |
+| A workload binding for this workflow file and a GitHub Environment (GitHub OIDC) | `production.deploy` refuses a caller-asserted actor. The workload identity is admitted only when the OIDC token's `environment` claim equals the binding's GitHub Environment, so every job that calls AtlaSent declares that `environment:` |
 | An approval policy on `production.deploy` naming who may approve | AtlaSent holds until a qualified, independent approver resolves it |
 
 ## The workflow
@@ -49,6 +51,15 @@ permissions:
 jobs:
   gate:
     runs-on: ubuntu-latest
+    # The GitHub Environment the workload binding names. Without it the OIDC
+    # token carries no matching environment claim and the actor is unverified.
+    environment: production
+    # A job-level block replaces the workflow-level one, so it restates them.
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+      statuses: write   # the gate result as an "AtlaSent Policy Gate" commit status
     outputs:
       admitted: ${{ steps.admit.outputs.admitted }}
       operation-id: ${{ steps.admit.outputs.operation-id }}
@@ -121,7 +132,9 @@ jobs:
     needs: [gate, deploy]
     if: always() && needs.gate.outputs.operation-id != ''
     runs-on: ubuntu-latest
+    environment: production
     permissions:
+      contents: read
       actions: read
       deployments: read
     steps:
@@ -151,11 +164,17 @@ jobs:
 | The plan changed between approval and claim | `evaluate` | claim refused (`change_plan_mismatch`); no permit |
 | Workflow file or repository is not the enrolled one | `evaluate` / `admit` | actor unverified; no permit, or permit not spent |
 | Permit replayed (a re-run of the same permit) | `admit` | refused, `PERMIT_ALREADY_USED`; deploy job skipped |
-| Permit expired or revoked | `admit` | refused; deploy job skipped |
-| Different target, environment or execution hash | `admit` | refused; permit stays unspent |
+| Permit expired or revoked | `admit` | refused (`PERMIT_EXPIRED` / `PERMIT_REVOKED`); deploy job skipped |
+| A tampered plan (different execution hash) | `admit` | refused `PAYLOAD_MISMATCH`; permit stays unspent |
+| A different target | `admit` | refused `PERMIT_BINDING_MISMATCH`; permit stays unspent |
+| A different environment | `admit` | refused `ENVIRONMENT_MISMATCH`; permit stays unspent |
 | Admission response lost in transit | `admit` | `admission-outcome-unknown: true`; deploy job skipped; look up `operation-key` before retrying |
 | Deploy job fails or is cancelled | `establish` | recorded `failed` / `unknown`; never `succeeded` |
 | Deployed a different revision, or GitHub shows no matching deployment | `establish` | not established; step fails |
+
+`admit-operation` outputs the runtime's code as `verify-error-code`, so a
+workflow (or a refusal test) can tell why a permit was refused, not only that
+it was.
 
 ## What this does not prove
 
