@@ -31,7 +31,7 @@ be skipped by the workflow.
 |---|---|
 | An AtlaSent API key with `evaluate:write`, `verify:execute`, `idp_broker:mint`, `approvals:read`, `change_brief:read`, `consequential_operations:write` (plus `approval_artifact:mint` if the action class requires human approval) | evaluate, claim, admission and establishment each check their own scope. `change_brief:create` is not enough: it is for agent-bound keys only, and a CI key is not one |
 | The AtlaSent GitHub App installed on the repository and the repository bound in AtlaSent | the runtime reads the run, deployment and status itself through the App; without it the effect can only be `unknown` |
-| A workload binding for this workflow file and a GitHub Environment (GitHub OIDC) | `production.deploy` refuses a caller-asserted actor. The workload identity is admitted only when the OIDC token's `environment` claim equals the binding's GitHub Environment, so every job that calls AtlaSent declares that `environment:` |
+| A workload binding for this workflow file and a GitHub Environment (GitHub OIDC) | `production.deploy` refuses a caller-asserted actor. The workload identity is admitted only when the OIDC token's `environment` claim equals the binding's GitHub Environment, so the gate job (and the deploy job) declare that `environment:`. The establish job does not: it mints no workload identity |
 | An approval policy on `production.deploy` naming who may approve | AtlaSent holds until a qualified, independent approver resolves it |
 
 ## The workflow
@@ -132,7 +132,10 @@ jobs:
     needs: [gate, deploy]
     if: always() && needs.gate.outputs.operation-id != ''
     runs-on: ubuntu-latest
-    environment: production
+    # No `environment:` here. This job mints no workload identity (it uses the
+    # API key and GITHUB_TOKEN), and declaring a protected environment would
+    # wait for a second approval after the deploy and create a second
+    # deployment record. deploy-environment names the deploy job's environment.
     permissions:
       contents: read
       actions: read
