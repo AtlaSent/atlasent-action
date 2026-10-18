@@ -16,9 +16,11 @@ two new modes for an Azure-scoped deployment
   deployment runs.
 - `mode: establish-effect` calls `v1-azure-effect-verify` with the
   deployment's correlation id, then `establish-effect` with the recorded
-  observation. It succeeds only when the runtime answers established; a
-  mismatch, unbound or unknown observation fails the step, and a failed or
-  cancelled deployment is recorded as failure/unknown.
+  observation. It succeeds only when the runtime answers established. A
+  mismatch is handed to the runtime (which records a definitive one as
+  failure) and fails the step; an unbound or unknown observation fails it. A
+  deployment the pipeline reports as failed or cancelled is recorded as
+  `unknown`, never `failure`.
 
 `mode: enforce` and `verifyPermit: true` are now refused for an Azure scope,
 and an unrecognized `mode` fails the step instead of defaulting to `enforce`.

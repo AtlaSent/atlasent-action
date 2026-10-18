@@ -19,7 +19,15 @@
 //   establishAzureEffect      POST v1-consequential-operations/establish-effect
 //                             with { operation_id, attempt_id,
 //                             azure_observation_id }. The RUNTIME decides
-//                             whether the observation is the admitted effect.
+//                             whether the observation is the admitted effect
+//                             (established), or definitive Azure evidence that
+//                             it failed (a mismatch it records as failure).
+//
+// This client never records a definitive failure itself. A deployment step
+// the pipeline reports as failed or cancelled is recorded as `unknown`: a
+// failed `az deployment group create` does not prove Azure rejected the
+// deployment, and a `failure` would make the operation terminal so later
+// evidence could never establish it.
 //
 // This module never authorizes anything and never reports success itself:
 // "established" is returned only when the runtime answers state "succeeded"
@@ -200,8 +208,10 @@ export async function admitAzureOperation(args: AdmitArgs, deps: Deps = {}): Pro
   if (!res.ok) {
     const unknown = res.status === 503 && /admission_outcome_unknown/.test(text);
     throw new AzureOperationError(
-      `admission refused (HTTP ${res.status}): ${boundedDetail(json, text)}` +
-        (unknown ? ` — the outcome is unknown; look up operation_key=${operationKey} before any retry` : ""),
+      unknown
+        ? `admission outcome unknown (HTTP ${res.status}): ${boundedDetail(json, text)} — it may have committed; ` +
+          `look up operation_key=${operationKey} before any retry`
+        : `admission refused (HTTP ${res.status}): ${boundedDetail(json, text)}`,
       res.status,
       unknown,
       unknown
@@ -227,6 +237,7 @@ export async function admitAzureOperation(args: AdmitArgs, deps: Deps = {}): Pro
 
 // ── Recording a non-success outcome ──────────────────────────────────────────
 
+/** "failed" is what the PIPELINE reported. It is still recorded as `unknown`. */
 export type DeploymentOutcome = "succeeded" | "failed" | "unknown";
 
 /**
@@ -241,11 +252,15 @@ export function normalizeDeploymentOutcome(raw: string | undefined): DeploymentO
   return "unknown";
 }
 
-/** A failed/unknown deployment is reported as such. Non-success never needs proof. */
+/**
+ * A deployment step that did not succeed is recorded as `unknown`, never
+ * `failure`: the pipeline's own step status is not Azure evidence. `recorded`
+ * is true only on HTTP 200.
+ */
 export async function recordNonSuccess(
-  args: { apiUrl?: string; apiKey: string; operationId: string; attemptId: string; outcome: "failed" | "unknown"; detail: string },
+  args: { apiUrl?: string; apiKey: string; operationId: string; attemptId: string; detail: string },
   deps: Deps = {},
-): Promise<{ status: number; state: string | null }> {
+): Promise<{ status: number; state: string | null; recorded: boolean }> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const apiUrl = base(args.apiUrl);
   let res: Response;
@@ -256,15 +271,15 @@ export async function recordNonSuccess(
       body: JSON.stringify({
         operation_id: args.operationId,
         attempt_id: args.attemptId,
-        outcome: args.outcome === "failed" ? "failure" : "unknown",
-        observation: { source: "atlasent-azure-devops-task", deployment_outcome: args.detail },
+        outcome: "unknown",
+        observation: { source: "atlasent-azure-devops-task", pipeline_reported_outcome: args.detail },
       }),
     });
   } catch {
-    return { status: 0, state: null };
+    return { status: 0, state: null, recorded: false };
   }
   const json = parseJson(await res.text());
-  return { status: res.status, state: str(json?.["state"]) };
+  return { status: res.status, state: str(json?.["state"]), recorded: res.status === 200 };
 }
 
 // ── Activity Log observation ─────────────────────────────────────────────────
@@ -307,8 +322,10 @@ export interface RecordEffectArgs {
 /**
  * Ask AtlaSent to read Azure's Activity Log for the deployment and record an
  * observation. Polls only while the answer is `unknown` (not seen yet).
- * Returns the observation only when it is `verified` AND bound to the ARM
- * deployment the decision named; throws on everything else.
+ * Returns the observation when it is `verified` AND bound to the ARM
+ * deployment the decision named, or when it is a `mismatch` (which the caller
+ * hands to establish-effect so the runtime can decide whether it is
+ * definitive failure evidence). Throws on everything else.
  */
 export async function recordAzureEffect(args: RecordEffectArgs, deps: Deps = {}): Promise<Observation> {
   const fetchImpl = deps.fetchImpl ?? fetch;
@@ -353,15 +370,7 @@ export async function recordAzureEffect(args: RecordEffectArgs, deps: Deps = {})
     if (!obs) {
       throw new AzureOperationError("v1-azure-effect-verify returned no usable observation", res.status, false, "EFFECT_VERIFY_MALFORMED");
     }
-    if (obs.outcome === "mismatch") {
-      throw new AzureOperationError(
-        `Azure's Activity Log does not match the allowed decision (observation ${obs.id}` +
-          (obs.reasons.length ? `: ${obs.reasons.join(", ").slice(0, 300)}` : "") + ")",
-        res.status,
-        false,
-        "AZURE_EFFECT_MISMATCH",
-      );
-    }
+    if (obs.outcome === "mismatch") return obs;
     if (obs.outcome === "verified") {
       if (!obs.operationBound) {
         throw new AzureOperationError(

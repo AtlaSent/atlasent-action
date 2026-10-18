@@ -99,7 +99,7 @@ does with `secrets.*` — an explicit `env:` block on the step is required):
 | `operationId` / `attemptId` | — | `mode: establish-effect`: the outputs of the admit-operation step. |
 | `evaluationId` | — | `mode: establish-effect`: the `evaluationId` output of the evaluate-only step. |
 | `correlationId` | — | `mode: establish-effect`: the ARM deployment's correlation id. Required when the deployment succeeded. |
-| `deploymentOutcome` | `succeeded` | `mode: establish-effect`: `succeeded`, `failed` or `unknown` (`Agent.JobStatus` values accepted). Anything but succeeded is recorded as failure/unknown and fails the step. |
+| `deploymentOutcome` | `succeeded` | `mode: establish-effect`: `succeeded`, `failed` or `unknown` (`Agent.JobStatus` values accepted). Anything but succeeded is recorded as `unknown` (a pipeline step status is not Azure evidence of failure) and fails the step. |
 | `effectWaitMinutes` | `15` | `mode: establish-effect`: how long to wait for the deployment to appear in Azure's Activity Log (max 120). |
 | `permitToken` | — | Required when `verifyPermit: true` or `mode: admit-operation`: the `permitToken` output from an earlier `mode: evaluate-only` step. |
 | `apiUrl` | — | Overrides `ATLASENT_BASE_URL`. |
@@ -247,10 +247,21 @@ operation only from Azure's own Activity Log. Four steps, one pipeline:
    `effectWaitMinutes`) and records an observation; the task then calls
    `establish-effect` with that observation and the runtime decides. The step
    succeeds only when the runtime answers `succeeded` / `established`. A
-   `mismatch`, an observation not bound to the named deployment, an
-   `unknown` past the wait budget, or any refusal fails the step and leaves
-   the operation open. A failed or cancelled deployment is recorded on the
-   attempt as `failure` / `unknown` and the step fails.
+   `mismatch` observation is handed to `establish-effect` too, so the runtime
+   can record a definitive mismatch as failure; the step fails either way. An
+   observation not bound to the named deployment, an `unknown` past the wait
+   budget, or any refusal fails the step and leaves the operation open.
+   A deployment the pipeline reports as failed or cancelled is recorded on
+   the attempt as `unknown`, never `failure`: a failed
+   `az deployment group create` does not prove Azure rejected the deployment,
+   and only the runtime records a definitive failure, from Azure evidence.
+   The step fails, and if that record is not accepted (HTTP 200) the error
+   names the `operationId` / `attemptId` to reconcile.
+
+If `admit-operation` fails, its error names the `operationKey` (a digest of
+the permit, also set as an output) and says whether the admission was
+**refused** (nothing consumed) or its outcome is **unknown** (it may have
+committed: reconcile by that key before retrying or minting a fresh permit).
 
 `mode: enforce` and `verifyPermit: true` are **refused** for an Azure scope:
 a plain consuming verify spends the permit with no operation for the

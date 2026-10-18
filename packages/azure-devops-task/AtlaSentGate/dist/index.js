@@ -8055,7 +8055,7 @@ async function admitAzureOperation(args, deps = {}) {
   if (!res.ok) {
     const unknown = res.status === 503 && /admission_outcome_unknown/.test(text);
     throw new AzureOperationError(
-      `admission refused (HTTP ${res.status}): ${boundedDetail(json, text)}` + (unknown ? ` \u2014 the outcome is unknown; look up operation_key=${operationKey} before any retry` : ""),
+      unknown ? `admission outcome unknown (HTTP ${res.status}): ${boundedDetail(json, text)} \u2014 it may have committed; look up operation_key=${operationKey} before any retry` : `admission refused (HTTP ${res.status}): ${boundedDetail(json, text)}`,
       res.status,
       unknown,
       unknown ? "ADMISSION_OUTCOME_UNKNOWN" : plainCode(json?.["verify_error_code"]) ?? plainCode(json?.["error_code"] ?? json?.["error"]) ?? "ADMISSION_REFUSED"
@@ -8095,15 +8095,15 @@ async function recordNonSuccess(args, deps = {}) {
       body: JSON.stringify({
         operation_id: args.operationId,
         attempt_id: args.attemptId,
-        outcome: args.outcome === "failed" ? "failure" : "unknown",
-        observation: { source: "atlasent-azure-devops-task", deployment_outcome: args.detail }
+        outcome: "unknown",
+        observation: { source: "atlasent-azure-devops-task", pipeline_reported_outcome: args.detail }
       })
     });
   } catch {
-    return { status: 0, state: null };
+    return { status: 0, state: null, recorded: false };
   }
   const json = parseJson(await res.text());
-  return { status: res.status, state: str(json?.["state"]) };
+  return { status: res.status, state: str(json?.["state"]), recorded: res.status === 200 };
 }
 function readObservation(json) {
   const o = json?.["observation"];
@@ -8164,14 +8164,8 @@ async function recordAzureEffect(args, deps = {}) {
     if (!obs) {
       throw new AzureOperationError("v1-azure-effect-verify returned no usable observation", res.status, false, "EFFECT_VERIFY_MALFORMED");
     }
-    if (obs.outcome === "mismatch") {
-      throw new AzureOperationError(
-        `Azure's Activity Log does not match the allowed decision (observation ${obs.id}` + (obs.reasons.length ? `: ${obs.reasons.join(", ").slice(0, 300)}` : "") + ")",
-        res.status,
-        false,
-        "AZURE_EFFECT_MISMATCH"
-      );
-    }
+    if (obs.outcome === "mismatch")
+      return obs;
     if (obs.outcome === "verified") {
       if (!obs.operationBound) {
         throw new AzureOperationError(
@@ -8658,13 +8652,16 @@ async function runAdmitOperation(inputs, log) {
     };
   } catch (err) {
     const e = err instanceof AzureOperationError ? err : null;
+    const operationKey = admissionOperationKey(permitToken);
+    const message = e?.outcomeUnknown ? `AtlaSent Gate: Azure admission outcome UNKNOWN (code=${e.code ?? "ADMISSION_OUTCOME_UNKNOWN"}): ${describeError(err)}. It may have committed, so the permit may be spent and an operation may exist. Do not run the deployment, and do not retry or mint a fresh permit until operation_key=${operationKey} has been looked up and reconciled.` : `AtlaSent Gate: Azure operation NOT admitted (refused${e?.code ? `, code=${e.code}` : ""}): ${describeError(err)}. Nothing was consumed or admitted (operation_key=${operationKey}). Do not run the deployment (fail-closed).`;
     return {
       ok: false,
-      message: `AtlaSent Gate: Azure operation NOT admitted${e?.code ? ` (code=${e.code})` : ""}: ${describeError(err)}. Do not run the deployment (fail-closed).`,
+      message,
       outputs: {
         ...emptyOutputs(),
         decision: "deny",
         permitToken,
+        operationKey,
         admissionOutcomeUnknown: e?.outcomeUnknown ? "true" : "false"
       }
     };
@@ -8680,26 +8677,26 @@ async function runEstablishEffect(inputs, log) {
   const operationId = inputs.operationId;
   const attemptId = inputs.attemptId;
   if (inputs.deploymentOutcome !== "succeeded") {
-    const outcome = inputs.deploymentOutcome === "failed" ? "failed" : "unknown";
+    const reported = inputs.deploymentOutcome ?? "unknown";
     const r = await recordNonSuccess({
       apiUrl: inputs.apiUrl,
       apiKey: inputs.apiKey,
       operationId,
       attemptId,
-      outcome,
-      detail: outcome
+      detail: reported
     });
-    const recorded = r.status >= 200 && r.status < 300;
+    const ids = `operation_id=${operationId} attempt_id=${attemptId}`;
     return {
       ok: false,
-      message: `AtlaSent Gate: the deployment was reported ${outcome}; its effect was NOT established. ` + (recorded ? `The attempt was recorded as ${outcome}${r.state ? ` (operation state=${r.state})` : ""}.` : `Recording the ${outcome} outcome also failed (HTTP ${r.status || "unreachable"}); the operation stays open.`),
-      outputs: { ...base2, effectState: r.state ?? `record_attempt_http_${r.status}` }
+      message: `AtlaSent Gate: the pipeline reported the deployment ${reported}; its effect was NOT established. ` + (r.recorded ? `The attempt was recorded as unknown (a pipeline step status is not Azure evidence of failure)${r.state ? `, operation state=${r.state}` : ""} (${ids}).` : `Recording it as unknown FAILED (HTTP ${r.status || "unreachable"}); the operation is still open. Record it before any retry (${ids}).`),
+      outputs: { ...base2, effectState: r.recorded ? r.state ?? "unknown_recorded" : `record_attempt_http_${r.status}` }
     };
   }
   log.info(
     `AtlaSent Gate: asking AtlaSent to read Azure's Activity Log for correlation id ${inputs.correlationId} (waiting up to ${inputs.effectWaitMinutes}m for the event to appear).`
   );
   let observationId;
+  let mismatch = false;
   try {
     const obs = await recordAzureEffect({
       apiUrl: inputs.apiUrl,
@@ -8709,6 +8706,7 @@ async function runEstablishEffect(inputs, log) {
       waitMs: (inputs.effectWaitMinutes ?? 15) * 6e4
     });
     observationId = obs.id;
+    mismatch = obs.outcome === "mismatch";
   } catch (err) {
     const e = err instanceof AzureOperationError ? err : null;
     return {
@@ -8717,7 +8715,9 @@ async function runEstablishEffect(inputs, log) {
       outputs: { ...base2, effectState: e?.code ?? "effect_verify_failed" }
     };
   }
-  log.info(`AtlaSent Gate: Activity Log observation ${observationId} is verified and bound; establishing the effect.`);
+  log.info(
+    mismatch ? `AtlaSent Gate: Activity Log observation ${observationId} is a MISMATCH; handing it to the runtime, which records a definitive one as failure.` : `AtlaSent Gate: Activity Log observation ${observationId} is verified and bound; establishing the effect.`
+  );
   const est = await establishAzureEffect({
     apiUrl: inputs.apiUrl,
     apiKey: inputs.apiKey,
@@ -8731,6 +8731,13 @@ async function runEstablishEffect(inputs, log) {
     effectState: est.state,
     effectEstablished: est.established ? "true" : "false"
   };
+  if (mismatch) {
+    return {
+      ok: false,
+      message: `AtlaSent Gate: Azure's Activity Log does not match the allowed decision (observation ${observationId}). The runtime answered HTTP ${est.httpStatus || "unreachable"}, state=${est.state}${est.verdict ? `, verdict=${est.verdict}` : ""}${est.reason ? `, reason=${est.reason}` : ""}. The effect was NOT established (operation_id=${operationId} attempt_id=${attemptId}).`,
+      outputs: { ...outputs, effectEstablished: "false" }
+    };
+  }
   if (!est.established) {
     return {
       ok: false,

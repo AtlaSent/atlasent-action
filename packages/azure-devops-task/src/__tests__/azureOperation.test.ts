@@ -177,9 +177,15 @@ describe("recordAzureEffect", () => {
     expect(f.calls.length).toBe(4); // t=0, 10s, 20s, 25s
   });
 
-  it("fails on mismatch, on verified-but-unbound, on an unexpected outcome and on a malformed body — without polling", async () => {
+  it("returns a mismatch at once (for the runtime to judge), without polling", async () => {
+    const f = fakeFetch([obs("mismatch", { reasons: ["resource_outside_scope"] })]);
+    const r = await recordAzureEffect(args, { fetchImpl: f.impl, sleep: async () => {} });
+    expect(r).toMatchObject({ id: OBS, outcome: "mismatch" });
+    expect(f.calls).toHaveLength(1);
+  });
+
+  it("fails on verified-but-unbound, on an unexpected outcome and on a malformed body — without polling", async () => {
     const expectations: Array<[{ status: number; body: unknown }, string]> = [
-      [obs("mismatch", { reasons: ["resource_outside_scope"] }), "AZURE_EFFECT_MISMATCH"],
       [obs("verified", { operation_bound: false }), "AZURE_EFFECT_UNBOUND"],
       [obs("verified", { operation_bound: "true" }), "AZURE_EFFECT_UNBOUND"],
       [obs("success"), "EFFECT_VERIFY_MALFORMED"],
@@ -250,14 +256,22 @@ describe("recordNonSuccess / normalizeDeploymentOutcome", () => {
     expect(normalizeDeploymentOutcome(undefined)).toBe("unknown");
   });
 
-  it("records failure/unknown through record-attempt, never success", async () => {
-    const f = fakeFetch([{ status: 200, body: { state: "failed" } }]);
-    const r = await recordNonSuccess({ apiUrl: API, apiKey: "k", operationId: OP, attemptId: AT, outcome: "failed", detail: "failed" }, { fetchImpl: f.impl });
-    expect(r).toEqual({ status: 200, state: "failed" });
+  it("records a pipeline-reported failure as unknown, never failure or success", async () => {
+    const f = fakeFetch([{ status: 200, body: { state: "submitting" } }]);
+    const r = await recordNonSuccess({ apiUrl: API, apiKey: "k", operationId: OP, attemptId: AT, detail: "failed" }, { fetchImpl: f.impl });
+    expect(r).toEqual({ status: 200, state: "submitting", recorded: true });
     expect(f.calls[0].url).toBe(`${API}/v1-consequential-operations/record-attempt`);
-    expect(f.calls[0].body).toMatchObject({ operation_id: OP, attempt_id: AT, outcome: "failure" });
-    const g = fakeFetch([{ status: 200, body: {} }]);
-    await recordNonSuccess({ apiUrl: API, apiKey: "k", operationId: OP, attemptId: AT, outcome: "unknown", detail: "x" }, { fetchImpl: g.impl });
-    expect(g.calls[0].body.outcome).toBe("unknown");
+    expect(f.calls[0].body).toMatchObject({ operation_id: OP, attempt_id: AT, outcome: "unknown" });
+    expect(f.calls[0].body.observation).toMatchObject({ pipeline_reported_outcome: "failed" });
+  });
+
+  it("counts the outcome as recorded only on HTTP 200", async () => {
+    for (const a of [{ status: 201, body: {} }, { status: 409, body: {} }, { status: 500, body: {} }, new Error("x")] as const) {
+      const r = await recordNonSuccess(
+        { apiUrl: API, apiKey: "k", operationId: OP, attemptId: AT, detail: "failed" },
+        { fetchImpl: fakeFetch([a as never]).impl },
+      );
+      expect(r.recorded).toBe(false);
+    }
   });
 });

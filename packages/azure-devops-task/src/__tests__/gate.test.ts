@@ -19,6 +19,7 @@ vi.mock("@atlasent/enforce", async (importOriginal) => {
 
 import { evaluate, verifyPermit, reverifyPermit, waitForApprovalResolution, EnforceError } from "@atlasent/enforce";
 import type { Decision } from "@atlasent/enforce";
+import { admissionOperationKey } from "../azureOperation";
 import {
   GateInputError,
   emptyOutputs,
@@ -736,13 +737,22 @@ describe("Azure Consequential Operation modes", () => {
     expect(refused.outputs.verified).toBe("false");
     expect(refused.outputs.operationId).toBe("");
     expect(refused.message).toMatch(/PAYLOAD_MISMATCH/);
+    expect(refused.message).toMatch(/refused/);
     expect(refused.message).toMatch(/Do not run the deployment/);
     expect(refused.outputs.admissionOutcomeUnknown).toBe("false");
+    expect(refused.outputs.operationKey).toBe(admissionOperationKey("pt-1"));
 
     queue.push({ status: 503, body: { error: "admission_outcome_unknown" } });
     const unknown = await runGate(parseInputs(admitEnv()), nullLogger);
     expect(unknown.ok).toBe(false);
     expect(unknown.outputs.admissionOutcomeUnknown).toBe("true");
+    // The operator reconciles by the key: it is in the output and the message,
+    // the permit never is, and the message does not call it a refusal.
+    expect(unknown.outputs.operationKey).toBe(admissionOperationKey("pt-1"));
+    expect(unknown.message).toContain(`operation_key=${admissionOperationKey("pt-1")}`);
+    expect(unknown.message).toMatch(/UNKNOWN/);
+    expect(unknown.message).not.toMatch(/refused/);
+    expect(unknown.message).not.toContain("pt-1");
   });
 
   it("establish-effect: verify in the Activity Log, then establish, and succeed only on the runtime's answer", async () => {
@@ -759,18 +769,32 @@ describe("Azure Consequential Operation modes", () => {
     expect(calls[1].body).toEqual({ operation_id: OP, attempt_id: AT, azure_observation_id: OBS });
   });
 
-  it("establish-effect: a mismatch or unbound observation never reaches establish-effect", async () => {
-    for (const observation of [
-      { id: OBS, outcome: "mismatch", operation_bound: true, reasons: ["scope"] },
-      { id: OBS, outcome: "verified", operation_bound: false },
+  it("establish-effect: an unbound observation never reaches establish-effect", async () => {
+    queue.push({ status: 201, body: { observation: { id: OBS, outcome: "verified", operation_bound: false } } });
+    const r = await runGate(parseInputs(establishEnv()), nullLogger);
+    expect(r.ok).toBe(false);
+    expect(r.outputs.effectEstablished).toBe("false");
+    expect(r.message).toMatch(/NOT verified/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("establish-effect: a mismatch is handed to the runtime to record, and the step fails even if it answers established", async () => {
+    for (const runtime of [
+      { status: 200, body: { state: "failed", effect_establishment: { verdict: "mismatch", reason: "azure_operation_failed" } } },
+      { status: 200, body: { state: "succeeded", effect_establishment: { verdict: "established" } } },
     ]) {
       calls = [];
-      queue.push({ status: 201, body: { observation } });
+      queue.push({ status: 201, body: { observation: { id: OBS, outcome: "mismatch", operation_bound: true, reasons: ["failed"] } } });
+      queue.push(runtime);
       const r = await runGate(parseInputs(establishEnv()), nullLogger);
       expect(r.ok).toBe(false);
       expect(r.outputs.effectEstablished).toBe("false");
-      expect(r.message).toMatch(/NOT verified/);
-      expect(calls).toHaveLength(1);
+      expect(r.message).toMatch(/does not match/);
+      expect(calls.map((c) => c.url.replace(/^.*\/functions\/v1/, ""))).toEqual([
+        "/v1-azure-effect-verify",
+        "/v1-consequential-operations/establish-effect",
+      ]);
+      expect(calls[1].body).toEqual({ operation_id: OP, attempt_id: AT, azure_observation_id: OBS });
     }
   });
 
@@ -786,19 +810,30 @@ describe("Azure Consequential Operation modes", () => {
     expect(r.message).toMatch(/azure_correlation_has_mismatch_observation/);
   });
 
-  it("establish-effect: a failed or cancelled deployment is recorded as such and fails the step", async () => {
-    queue.push({ status: 200, body: { state: "failed" } });
-    const failed = await runGate(parseInputs(establishEnv({ deploymentOutcomeRaw: "Failed", correlationIdRaw: "" })), nullLogger);
-    expect(failed.ok).toBe(false);
-    expect(calls[0].url).toMatch(/\/record-attempt$/);
-    expect(calls[0].body.outcome).toBe("failure");
+  it("establish-effect: a failed or cancelled deployment step is recorded as unknown, never failure, and fails the step", async () => {
+    for (const reported of ["Failed", "failed", "Canceled", "Skipped"]) {
+      calls = [];
+      queue.push({ status: 200, body: { state: "submitting" } });
+      const r = await runGate(parseInputs(establishEnv({ deploymentOutcomeRaw: reported, correlationIdRaw: "" })), nullLogger);
+      expect(r.ok).toBe(false);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toMatch(/\/record-attempt$/);
+      expect(calls[0].body.outcome).toBe("unknown");
+      expect(r.message).toMatch(/recorded as unknown/);
+      expect(r.message).toContain(`operation_id=${OP} attempt_id=${AT}`);
+    }
+  });
 
-    calls = [];
-    queue.push({ status: 200, body: { state: "submitting" } });
-    const cancelled = await runGate(parseInputs(establishEnv({ deploymentOutcomeRaw: "Canceled" })), nullLogger);
-    expect(cancelled.ok).toBe(false);
-    expect(calls[0].body.outcome).toBe("unknown");
-    expect(calls).toHaveLength(1);
+  it("establish-effect: claims the outcome recorded only on HTTP 200, else names the ids for recovery", async () => {
+    for (const status of [201, 409, 500]) {
+      queue.push({ status, body: {} });
+      const r = await runGate(parseInputs(establishEnv({ deploymentOutcomeRaw: "Failed" })), nullLogger);
+      expect(r.ok).toBe(false);
+      expect(r.message).toMatch(/FAILED/);
+      expect(r.message).not.toMatch(/recorded as unknown \(/);
+      expect(r.message).toContain(`operation_id=${OP} attempt_id=${AT}`);
+      expect(r.outputs.effectState).toBe(`record_attempt_http_${status}`);
+    }
   });
 
   it("establish-effect requires operation/attempt ids, and evaluationId + correlationId when it succeeded", () => {

@@ -144,7 +144,7 @@
       "required": false,
       "defaultValue": "succeeded",
       "visibleRule": "mode = establish-effect",
-      "helpMarkDown": "For mode establish-effect: 'succeeded', 'failed' or 'unknown' (Agent.JobStatus values are accepted). Anything but succeeded is recorded on the attempt as failure/unknown and fails this step; it never establishes an effect."
+      "helpMarkDown": "For mode establish-effect: 'succeeded', 'failed' or 'unknown' (Agent.JobStatus values are accepted). Anything but succeeded is recorded on the attempt as unknown (a pipeline step status is not Azure evidence of failure; only the runtime records a definitive failure) and fails this step; it never establishes an effect."
     },
     {
       "name": "effectWaitMinutes",
