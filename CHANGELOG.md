@@ -4,6 +4,22 @@ All notable changes to `atlasent-action` are documented here.
 
 ## [Unreleased]
 
+### Fixed: `wait-for-approval` polls and claims at `/v1-approvals`
+
+The HOLD wait polled `GET {api}/v1/approvals/{id}` and claimed at
+`/v1/approvals/{id}/claim-permit`. Neither route exists on the runtime (the
+function is `v1-approvals`), so every wait failed with a 404 about a second
+after the HOLD. It now uses `/v1-approvals/{id}` and
+`/v1-approvals/{id}/claim-permit`.
+
+### Changed: a refused admission outputs the runtime's reason
+
+`admit-operation` now sets `verify-error-code` to the runtime's
+`verify_error_code` for a refused admission (`PAYLOAD_MISMATCH`,
+`PERMIT_BINDING_MISMATCH`, `PERMIT_ALREADY_USED`, ...), falling back to
+`ADMISSION_REFUSED` when the runtime names none. A lost response still reports
+`ADMISSION_OUTCOME_UNKNOWN`.
+
 ### Added: execution admission and effect establishment modes
 
 Two new modes complete the GitHub Gate journey without hand-written API calls
