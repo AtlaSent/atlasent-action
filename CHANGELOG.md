@@ -21,8 +21,8 @@ after the HOLD. It now uses `/v1-approvals/{id}` and
 - `admit-operation` honors the evaluate step's `resolved-actor` for
   optional-verified-actor actions (e.g. `package.release`), as `verify-permit`
   does. Mandatory change-control actions still always re-mint.
-- `change-brief` sends the canonical action, so a legacy alias such as
-  `deployment.production` no longer produces `CHANGE_BRIEF_MISMATCH`.
+- `change-brief` sends the canonical action, so the legacy alias for
+  `production.deploy` no longer produces `CHANGE_BRIEF_MISMATCH`.
 - `establish-effect` reads every page of the run's jobs, so a deploy job past
   the first 100 (large matrices) is found.
 
