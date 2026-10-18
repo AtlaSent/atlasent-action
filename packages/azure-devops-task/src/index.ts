@@ -11,7 +11,7 @@
 // already follows for the GitHub Action.
 
 import * as tl from "azure-pipelines-task-lib/task";
-import { GateInputError, parseInputs, runGate, type GateOutputs, type RawGateEnv, type TaskLogger } from "./gate";
+import { GateInputError, emptyOutputs, parseInputs, runGate, type GateOutputs, type RawGateEnv, type TaskLogger } from "./gate";
 
 const logger: TaskLogger = {
   debug: (message) => tl.debug(message),
@@ -50,6 +50,23 @@ function setOutputs(outputs: GateOutputs): void {
   console.log(
     `##vso[task.setvariable variable=waitedForApproval;isOutput=true]${outputs.waitedForApproval}`,
   );
+
+  // Azure Consequential Operation outputs (admit-operation / establish-effect).
+  // None is secret: operation_key is a digest of the permit, never the permit.
+  const plain: Array<keyof GateOutputs> = [
+    "executionHash",
+    "operationId",
+    "attemptId",
+    "operationKey",
+    "admissionOutcomeUnknown",
+    "azureObservationId",
+    "effectState",
+    "effectEstablished",
+  ];
+  for (const name of plain) {
+    tl.setVariable(name, outputs[name], false, true);
+    console.log(`##vso[task.setvariable variable=${name};isOutput=true]${outputs[name]}`);
+  }
 }
 
 async function main(): Promise<void> {
@@ -88,6 +105,13 @@ async function main(): Promise<void> {
     azureSubscriptionIdRaw: tl.getInput("azureSubscriptionId", false),
     azureResourceGroupRaw: tl.getInput("azureResourceGroup", false),
     azureDeploymentNameRaw: tl.getInput("azureDeploymentName", false),
+    executionHashRaw: tl.getInput("executionHash", false),
+    operationIdRaw: tl.getInput("operationId", false),
+    attemptIdRaw: tl.getInput("attemptId", false),
+    evaluationIdRaw: tl.getInput("evaluationId", false),
+    correlationIdRaw: tl.getInput("correlationId", false),
+    deploymentOutcomeRaw: tl.getInput("deploymentOutcome", false),
+    effectWaitMinutesRaw: tl.getInput("effectWaitMinutes", false),
     run: {
       organization_url: tl.getVariable("System.CollectionUri"),
       project: tl.getVariable("System.TeamProject"),
@@ -102,15 +126,7 @@ async function main(): Promise<void> {
   try {
     inputs = parseInputs(env);
   } catch (err) {
-    setOutputs({
-      decision: "",
-      verified: "false",
-      permitToken: "",
-      proofHash: "",
-      riskScore: "",
-      evaluationId: "",
-      waitedForApproval: "false",
-    });
+    setOutputs(emptyOutputs());
     const message =
       err instanceof GateInputError
         ? `AtlaSent Gate: ${err.message}`

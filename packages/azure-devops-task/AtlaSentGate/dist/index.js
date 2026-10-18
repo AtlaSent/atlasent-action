@@ -50,40 +50,40 @@ var require_balanced_match = __commonJS({
   "../../node_modules/balanced-match/index.js"(exports2, module2) {
     "use strict";
     module2.exports = balanced;
-    function balanced(a, b, str) {
+    function balanced(a, b, str2) {
       if (a instanceof RegExp)
-        a = maybeMatch(a, str);
+        a = maybeMatch(a, str2);
       if (b instanceof RegExp)
-        b = maybeMatch(b, str);
-      var r = range(a, b, str);
+        b = maybeMatch(b, str2);
+      var r = range(a, b, str2);
       return r && {
         start: r[0],
         end: r[1],
-        pre: str.slice(0, r[0]),
-        body: str.slice(r[0] + a.length, r[1]),
-        post: str.slice(r[1] + b.length)
+        pre: str2.slice(0, r[0]),
+        body: str2.slice(r[0] + a.length, r[1]),
+        post: str2.slice(r[1] + b.length)
       };
     }
-    function maybeMatch(reg, str) {
-      var m = str.match(reg);
+    function maybeMatch(reg, str2) {
+      var m = str2.match(reg);
       return m ? m[0] : null;
     }
     balanced.range = range;
-    function range(a, b, str) {
+    function range(a, b, str2) {
       var begs, beg, left, right, result;
-      var ai = str.indexOf(a);
-      var bi = str.indexOf(b, ai + 1);
+      var ai = str2.indexOf(a);
+      var bi = str2.indexOf(b, ai + 1);
       var i = ai;
       if (ai >= 0 && bi > 0) {
         if (a === b) {
           return [ai, bi];
         }
         begs = [];
-        left = str.length;
+        left = str2.length;
         while (i >= 0 && !result) {
           if (i == ai) {
             begs.push(i);
-            ai = str.indexOf(a, i + 1);
+            ai = str2.indexOf(a, i + 1);
           } else if (begs.length == 1) {
             result = [begs.pop(), bi];
           } else {
@@ -92,7 +92,7 @@ var require_balanced_match = __commonJS({
               left = beg;
               right = bi;
             }
-            bi = str.indexOf(b, i + 1);
+            bi = str2.indexOf(b, i + 1);
           }
           i = ai < bi && ai >= 0 ? ai : bi;
         }
@@ -118,22 +118,22 @@ var require_brace_expansion = __commonJS({
     var escPeriod = "\0PERIOD" + Math.random() + "\0";
     var EXPANSION_MAX = 1e5;
     var EXPANSION_MAX_LENGTH = 4e6;
-    function numeric(str) {
-      return parseInt(str, 10) == str ? parseInt(str, 10) : str.charCodeAt(0);
+    function numeric(str2) {
+      return parseInt(str2, 10) == str2 ? parseInt(str2, 10) : str2.charCodeAt(0);
     }
-    function escapeBraces(str) {
-      return str.split("\\\\").join(escSlash).split("\\{").join(escOpen).split("\\}").join(escClose).split("\\,").join(escComma).split("\\.").join(escPeriod);
+    function escapeBraces(str2) {
+      return str2.split("\\\\").join(escSlash).split("\\{").join(escOpen).split("\\}").join(escClose).split("\\,").join(escComma).split("\\.").join(escPeriod);
     }
-    function unescapeBraces(str) {
-      return str.split(escSlash).join("\\").split(escOpen).join("{").split(escClose).join("}").split(escComma).join(",").split(escPeriod).join(".");
+    function unescapeBraces(str2) {
+      return str2.split(escSlash).join("\\").split(escOpen).join("{").split(escClose).join("}").split(escComma).join(",").split(escPeriod).join(".");
     }
-    function parseCommaParts(str) {
-      if (!str)
+    function parseCommaParts(str2) {
+      if (!str2)
         return [""];
       var parts = [];
-      var m = balanced("{", "}", str);
+      var m = balanced("{", "}", str2);
       if (!m)
-        return str.split(",");
+        return str2.split(",");
       var pre = m.pre;
       var body = m.body;
       var post = m.post;
@@ -147,19 +147,19 @@ var require_brace_expansion = __commonJS({
       parts.push.apply(parts, p);
       return parts;
     }
-    function expandTop(str, options) {
-      if (!str)
+    function expandTop(str2, options) {
+      if (!str2)
         return [];
       options = options || {};
       var max = options.max == null ? EXPANSION_MAX : options.max;
       var maxLength = options.maxLength == null ? EXPANSION_MAX_LENGTH : options.maxLength;
-      if (str.substr(0, 2) === "{}") {
-        str = "\\{\\}" + str.substr(2);
+      if (str2.substr(0, 2) === "{}") {
+        str2 = "\\{\\}" + str2.substr(2);
       }
-      return expand(escapeBraces(str), max, maxLength, true).map(unescapeBraces);
+      return expand(escapeBraces(str2), max, maxLength, true).map(unescapeBraces);
     }
-    function embrace(str) {
-      return "{" + str + "}";
+    function embrace(str2) {
+      return "{" + str2 + "}";
     }
     function isPadded(el) {
       return /^-?0\d/.test(el);
@@ -170,7 +170,7 @@ var require_brace_expansion = __commonJS({
     function gte(i, y) {
       return i >= y;
     }
-    function combine(acc, base, pre, values, max, maxLength, dropEmpties, outBase) {
+    function combine(acc, base2, pre, values, max, maxLength, dropEmpties, outBase) {
       var out = [];
       var length = 0;
       for (var a = 0; a < acc.length; a++) {
@@ -178,12 +178,12 @@ var require_brace_expansion = __commonJS({
           if (out.length >= max)
             return out;
           var expansion = acc[a] + pre + values[v];
-          if (dropEmpties && expansion.length === base[a])
+          if (dropEmpties && expansion.length === base2[a])
             continue;
           if (length + expansion.length > maxLength)
             return out;
           out.push(expansion);
-          outBase.push(base[a]);
+          outBase.push(base2[a]);
           length += expansion.length;
         }
       }
@@ -235,20 +235,20 @@ var require_brace_expansion = __commonJS({
       }
       return N;
     }
-    function expand(str, max, maxLength, isTop) {
+    function expand(str2, max, maxLength, isTop) {
       var acc = [""];
       var accBase = [0];
       var dropEmpties = false;
       var firstGroup = true;
       var nextBase;
       for (; ; ) {
-        var m = balanced("{", "}", str);
+        var m = balanced("{", "}", str2);
         if (!m) {
-          return combine(acc, accBase, str, [""], max, maxLength, dropEmpties, []);
+          return combine(acc, accBase, str2, [""], max, maxLength, dropEmpties, []);
         }
         var pre = m.pre;
         if (/\$$/.test(pre)) {
-          return combine(acc, accBase, str, [""], max, maxLength, dropEmpties, []);
+          return combine(acc, accBase, str2, [""], max, maxLength, dropEmpties, []);
         }
         var isNumericSequence = /^-?\d+\.\.-?\d+(?:\.\.-?\d+)?$/.test(m.body);
         var isAlphaSequence = /^[a-zA-Z]\.\.[a-zA-Z](?:\.\.-?\d+)?$/.test(m.body);
@@ -256,7 +256,7 @@ var require_brace_expansion = __commonJS({
         var isOptions = m.body.indexOf(",") >= 0;
         if (!isSequence && !isOptions) {
           if (m.post.match(/,(?!,).*\}/)) {
-            str = m.pre + "{" + m.body + escClose + m.post;
+            str2 = m.pre + "{" + m.body + escClose + m.post;
             isTop = true;
             firstGroup = true;
             dropEmpties = false;
@@ -303,7 +303,7 @@ var require_brace_expansion = __commonJS({
               accBase = nextBase;
               if (!m.post.length)
                 break;
-              str = m.post;
+              str2 = m.post;
               continue;
             }
           }
@@ -344,7 +344,7 @@ var require_brace_expansion = __commonJS({
         accBase = nextBase;
         if (!m.post.length)
           break;
-        str = m.post;
+        str2 = m.post;
       }
       return acc;
     }
@@ -2742,29 +2742,29 @@ var require_internal = __commonJS({
     if (semver.lt(process.versions.node, "4.2.0")) {
       _warning("Tasks require a new agent.  Upgrade your agent or node to 4.2.0 or later", IssueSource.TaskInternal);
     }
-    function _startsWith(str, start) {
-      return str.slice(0, start.length) == start;
+    function _startsWith(str2, start) {
+      return str2.slice(0, start.length) == start;
     }
     exports2._startsWith = _startsWith;
-    function _endsWith(str, end) {
-      return str.slice(-end.length) == end;
+    function _endsWith(str2, end) {
+      return str2.slice(-end.length) == end;
     }
     exports2._endsWith = _endsWith;
-    function _truncateBeforeSensitiveKeyword(str, sensitiveKeywordsPattern) {
-      if (!str) {
-        return str;
+    function _truncateBeforeSensitiveKeyword(str2, sensitiveKeywordsPattern) {
+      if (!str2) {
+        return str2;
       }
-      var index = str.search(sensitiveKeywordsPattern);
+      var index = str2.search(sensitiveKeywordsPattern);
       if (index <= 0) {
-        return str;
+        return str2;
       }
-      return "".concat(str.substring(0, index), "...");
+      return "".concat(str2.substring(0, index), "...");
     }
     exports2._truncateBeforeSensitiveKeyword = _truncateBeforeSensitiveKeyword;
     var _outStream = process.stdout;
     var _errStream = process.stderr;
-    function _writeLine(str) {
-      _outStream.write(str + os.EOL);
+    function _writeLine(str2) {
+      _outStream.write(str2 + os.EOL);
     }
     exports2._writeLine = _writeLine;
     function _setStdStream(stdStream) {
@@ -7341,7 +7341,7 @@ var require_transport = __commonJS({
     exports2.get = get;
     var node_https_1 = __importDefault(require("node:https"));
     var node_http_1 = __importDefault(require("node:http"));
-    function post(url, body, headers) {
+    function post(url, body, headers2) {
       return new Promise((resolve, reject) => {
         const parsed = new URL(url);
         const transport = parsed.protocol === "https:" ? node_https_1.default : node_http_1.default;
@@ -7353,7 +7353,7 @@ var require_transport = __commonJS({
           headers: {
             "Content-Type": "application/json",
             "Content-Length": Buffer.byteLength(body),
-            ...headers
+            ...headers2
           },
           timeout: 3e4
         }, (res) => {
@@ -7371,7 +7371,7 @@ var require_transport = __commonJS({
         req.end();
       });
     }
-    function get(url, headers) {
+    function get(url, headers2) {
       return new Promise((resolve, reject) => {
         const parsed = new URL(url);
         const transport = parsed.protocol === "https:" ? node_https_1.default : node_http_1.default;
@@ -7380,7 +7380,7 @@ var require_transport = __commonJS({
           port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
           path: parsed.pathname + parsed.search,
           method: "GET",
-          headers,
+          headers: headers2,
           timeout: 3e4
         }, (res) => {
           const chunks = [];
@@ -7407,7 +7407,7 @@ var require_functionRegion = __commonJS({
     exports2.FunctionRegionConfigError = exports2.SUPPORTED_FUNCTION_REGIONS = exports2.HOSTED_RUNTIME_HOSTS = exports2.DEFAULT_FUNCTION_REGION = exports2.FUNCTION_REGION_ENV = exports2.FUNCTION_REGION_HEADER = void 0;
     exports2.parseFunctionRegion = parseFunctionRegion;
     exports2.resolveFunctionRegion = resolveFunctionRegion;
-    exports2.functionRegionHeaders = functionRegionHeaders;
+    exports2.functionRegionHeaders = functionRegionHeaders2;
     exports2.FUNCTION_REGION_HEADER = "x-region";
     exports2.FUNCTION_REGION_ENV = "ATLASENT_FUNCTION_REGION";
     exports2.DEFAULT_FUNCTION_REGION = "us-west-1";
@@ -7464,7 +7464,7 @@ var require_functionRegion = __commonJS({
         return parseFunctionRegion(fromEnv);
       return isHostedRuntime(url) ? exports2.DEFAULT_FUNCTION_REGION : null;
     }
-    function functionRegionHeaders(url, explicit, env = process.env) {
+    function functionRegionHeaders2(url, explicit, env = process.env) {
       const region = resolveFunctionRegion(url, explicit, env);
       return region ? { [exports2.FUNCTION_REGION_HEADER]: region } : {};
     }
@@ -7488,7 +7488,7 @@ var require_dist = __commonJS({
     exports2.enforce = enforce;
     var transport_1 = require_transport();
     var functionRegion_1 = require_functionRegion();
-    var DEFAULT_API_URL = "https://api.atlasent.io";
+    var DEFAULT_API_URL2 = "https://api.atlasent.io";
     function runtimeHeaders(config, url) {
       return {
         Authorization: `Bearer ${config.apiKey}`,
@@ -7526,7 +7526,7 @@ var require_dist = __commonJS({
     };
     exports2.EnforceError = EnforceError2;
     async function evaluate2(config) {
-      const apiUrl = (config.apiUrl ?? DEFAULT_API_URL).replace(/\/$/, "");
+      const apiUrl = (config.apiUrl ?? DEFAULT_API_URL2).replace(/\/$/, "");
       const rawContext = { ...config.context };
       const contextSnapshot = rawContext["state_snapshot"];
       delete rawContext["state_snapshot"];
@@ -7693,7 +7693,7 @@ var require_dist = __commonJS({
       if (!config.approvalId) {
         throw new EnforceError2("Cannot wait for approval: no approvalRequestId on the hold/escalate decision", "evaluate");
       }
-      const apiUrl = (config.apiUrl ?? DEFAULT_API_URL).replace(/\/$/, "");
+      const apiUrl = (config.apiUrl ?? DEFAULT_API_URL2).replace(/\/$/, "");
       const url = `${apiUrl}/v1-approvals/${encodeURIComponent(config.approvalId)}`;
       const deadline = Date.now() + config.maxWaitMs;
       while (Date.now() < deadline) {
@@ -7743,7 +7743,7 @@ var require_dist = __commonJS({
     }
     exports2.CLOUD_LOCUS_CONTEXT_KEYS = ["aws", "azure"];
     async function postVerify(config, permitToken, decision) {
-      const apiUrl = (config.apiUrl ?? DEFAULT_API_URL).replace(/\/$/, "");
+      const apiUrl = (config.apiUrl ?? DEFAULT_API_URL2).replace(/\/$/, "");
       const bodyObj = {
         permit_token: permitToken,
         action_type: config.action,
@@ -7939,7 +7939,304 @@ var require_dist = __commonJS({
 var tl = __toESM(require_task());
 
 // src/gate.ts
+var import_enforce2 = __toESM(require_dist());
+
+// src/azureOperation.ts
+var import_crypto = require("crypto");
 var import_enforce = __toESM(require_dist());
+var AZURE_PROVIDER = "azure";
+var AZURE_DEPLOYMENT_WRITE_OPERATION = "Microsoft.Resources/deployments/write";
+var DEFAULT_API_URL = "https://api.atlasent.io/functions/v1";
+var PAYLOAD_HASH_RE = /^[0-9a-f]{64}$/;
+var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+var AzureOperationError = class extends Error {
+  constructor(message, httpStatus, outcomeUnknown = false, code = null) {
+    super(message);
+    this.httpStatus = httpStatus;
+    this.outcomeUnknown = outcomeUnknown;
+    this.code = code;
+    this.name = "AzureOperationError";
+  }
+};
+function base(apiUrl) {
+  return (apiUrl ?? DEFAULT_API_URL).replace(/\/+$/, "");
+}
+function headers(apiUrl, apiKey) {
+  return {
+    ...(0, import_enforce.functionRegionHeaders)(apiUrl),
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+    Accept: "application/json"
+  };
+}
+function parseJson(text) {
+  try {
+    const v = JSON.parse(text);
+    return v && typeof v === "object" && !Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+function str(v) {
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+function boundedDetail(json, text) {
+  if (json) {
+    const parts = [json["error_code"] ?? json["error"], json["message"] ?? json["reason"]].filter(
+      (v) => typeof v === "string" && v.trim()
+    );
+    if (parts.length)
+      return parts.join(": ").replace(/\s+/g, " ").slice(0, 400);
+  }
+  return text.replace(/\s+/g, " ").trim().slice(0, 400);
+}
+function plainCode(v) {
+  return typeof v === "string" && /^[A-Za-z][A-Za-z0-9_:.-]{0,127}$/.test(v) ? v : null;
+}
+function admissionOperationKey(permitToken) {
+  return `ado-permit:${(0, import_crypto.createHash)("sha256").update(permitToken).digest("hex").slice(0, 40)}`;
+}
+function deploymentResourceId(locus) {
+  if (!locus.deployment_name)
+    throw new Error("locus has no deployment_name");
+  return `/subscriptions/${locus.subscription_id.toLowerCase()}/resourcegroups/${locus.resource_group.toLowerCase()}/providers/microsoft.resources/deployments/${locus.deployment_name.toLowerCase()}`;
+}
+async function admitAzureOperation(args, deps = {}) {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const apiUrl = base(args.apiUrl);
+  if (!PAYLOAD_HASH_RE.test(args.payloadHash)) {
+    throw new AzureOperationError(
+      "admission needs the permit's payload binding as 64-char lowercase hex (the executionHash output of the evaluate-only step); none was supplied",
+      null,
+      false,
+      "MISSING_BINDING"
+    );
+  }
+  if (!args.azure.deployment_name) {
+    throw new AzureOperationError(
+      "admission needs azureDeploymentName: the runtime establishes an Azure effect only for the ARM deployment the decision named",
+      null,
+      false,
+      "MISSING_BINDING"
+    );
+  }
+  const operationKey = admissionOperationKey(args.permitToken);
+  const body = {
+    permit_token: args.permitToken,
+    action_type: args.actionType,
+    actor_id: args.actorId,
+    target_id: args.targetId,
+    environment: args.environment,
+    payload_hash: args.payloadHash,
+    operation_key: operationKey,
+    provider: AZURE_PROVIDER,
+    provider_idempotency_key: `azure_deployment:${deploymentResourceId(args.azure)}`,
+    // Only the locus is a verify input; the runtime forwards exactly these two
+    // strings to the permit's AZURE_LOCUS binding check.
+    context: { azure: { subscription_id: args.azure.subscription_id, resource_group: args.azure.resource_group } }
+  };
+  let res;
+  try {
+    res = await fetchImpl(`${apiUrl}/v1-consequential-operations/consume-and-admit`, {
+      method: "POST",
+      headers: headers(apiUrl, args.apiKey),
+      body: JSON.stringify(body)
+    });
+  } catch (err) {
+    throw new AzureOperationError(
+      `admission request failed in transit (${err instanceof Error ? err.message : String(err)}); the outcome is unknown. Do not deploy and do not mint a fresh permit until operation_key=${operationKey} has been looked up`,
+      null,
+      true,
+      "ADMISSION_OUTCOME_UNKNOWN"
+    );
+  }
+  const text = await res.text();
+  const json = parseJson(text);
+  if (!res.ok) {
+    const unknown = res.status === 503 && /admission_outcome_unknown/.test(text);
+    throw new AzureOperationError(
+      `admission refused (HTTP ${res.status}): ${boundedDetail(json, text)}` + (unknown ? ` \u2014 the outcome is unknown; look up operation_key=${operationKey} before any retry` : ""),
+      res.status,
+      unknown,
+      unknown ? "ADMISSION_OUTCOME_UNKNOWN" : plainCode(json?.["verify_error_code"]) ?? plainCode(json?.["error_code"] ?? json?.["error"]) ?? "ADMISSION_REFUSED"
+    );
+  }
+  if (!json) {
+    throw new AzureOperationError("admission returned a non-JSON success body", res.status, true, "ADMISSION_OUTCOME_UNKNOWN");
+  }
+  const operationId = str(json["operation_id"]);
+  const attemptId = str(json["attempt_id"]);
+  if (!operationId || !attemptId) {
+    throw new AzureOperationError(
+      "admission returned no operation_id/attempt_id; the deployment must not run",
+      res.status,
+      true,
+      "ADMISSION_OUTCOME_UNKNOWN"
+    );
+  }
+  return { operationId, attemptId, operationKey, decisionId: str(json["decision_id"]) };
+}
+function normalizeDeploymentOutcome(raw) {
+  const v = (raw ?? "").trim().toLowerCase();
+  if (v === "succeeded" || v === "success" || v === "succeededwithissues")
+    return "succeeded";
+  if (v === "failed" || v === "failure")
+    return "failed";
+  return "unknown";
+}
+async function recordNonSuccess(args, deps = {}) {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const apiUrl = base(args.apiUrl);
+  let res;
+  try {
+    res = await fetchImpl(`${apiUrl}/v1-consequential-operations/record-attempt`, {
+      method: "POST",
+      headers: headers(apiUrl, args.apiKey),
+      body: JSON.stringify({
+        operation_id: args.operationId,
+        attempt_id: args.attemptId,
+        outcome: args.outcome === "failed" ? "failure" : "unknown",
+        observation: { source: "atlasent-azure-devops-task", deployment_outcome: args.detail }
+      })
+    });
+  } catch {
+    return { status: 0, state: null };
+  }
+  const json = parseJson(await res.text());
+  return { status: res.status, state: str(json?.["state"]) };
+}
+function readObservation(json) {
+  const o = json?.["observation"];
+  if (!o || typeof o !== "object" || Array.isArray(o))
+    return null;
+  const r = o;
+  const id = str(r["id"]);
+  const outcome = str(r["outcome"]);
+  if (!id || !UUID_RE.test(id) || !outcome)
+    return null;
+  return {
+    id,
+    outcome,
+    operationBound: r["operation_bound"] === true,
+    reasons: Array.isArray(r["reasons"]) ? r["reasons"].filter((x) => typeof x === "string") : []
+  };
+}
+async function recordAzureEffect(args, deps = {}) {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const now = deps.now ?? (() => Date.now());
+  const apiUrl = base(args.apiUrl);
+  if (!UUID_RE.test(args.correlationId)) {
+    throw new AzureOperationError("correlationId must be the ARM deployment's correlation id (a GUID)", null, false, "BAD_CORRELATION_ID");
+  }
+  const body = JSON.stringify({
+    request_id: args.requestId,
+    operation_name: AZURE_DEPLOYMENT_WRITE_OPERATION,
+    correlation_id: args.correlationId.toLowerCase()
+  });
+  const pollMs = args.pollMs ?? 3e4;
+  const deadline = now() + args.waitMs;
+  let attempt = 0;
+  for (; ; ) {
+    attempt++;
+    let res;
+    try {
+      res = await fetchImpl(`${apiUrl}/v1-azure-effect-verify`, { method: "POST", headers: headers(apiUrl, args.apiKey), body });
+    } catch (err) {
+      throw new AzureOperationError(
+        `v1-azure-effect-verify unreachable (${err instanceof Error ? err.message : String(err)})`,
+        null,
+        false,
+        "EFFECT_VERIFY_UNREACHABLE"
+      );
+    }
+    const text = await res.text();
+    const json = parseJson(text);
+    if (!res.ok) {
+      throw new AzureOperationError(
+        `v1-azure-effect-verify refused (HTTP ${res.status}): ${boundedDetail(json, text)}`,
+        res.status,
+        false,
+        plainCode(json?.["error_code"] ?? json?.["error"]) ?? "EFFECT_VERIFY_REFUSED"
+      );
+    }
+    const obs = readObservation(json);
+    if (!obs) {
+      throw new AzureOperationError("v1-azure-effect-verify returned no usable observation", res.status, false, "EFFECT_VERIFY_MALFORMED");
+    }
+    if (obs.outcome === "mismatch") {
+      throw new AzureOperationError(
+        `Azure's Activity Log does not match the allowed decision (observation ${obs.id}` + (obs.reasons.length ? `: ${obs.reasons.join(", ").slice(0, 300)}` : "") + ")",
+        res.status,
+        false,
+        "AZURE_EFFECT_MISMATCH"
+      );
+    }
+    if (obs.outcome === "verified") {
+      if (!obs.operationBound) {
+        throw new AzureOperationError(
+          `the Activity Log shows an operation in the authorized scope, but not bound to the ARM deployment this decision named (observation ${obs.id})`,
+          res.status,
+          false,
+          "AZURE_EFFECT_UNBOUND"
+        );
+      }
+      return obs;
+    }
+    if (obs.outcome !== "unknown") {
+      throw new AzureOperationError(`v1-azure-effect-verify returned outcome "${obs.outcome}"`, res.status, false, "EFFECT_VERIFY_MALFORMED");
+    }
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      throw new AzureOperationError(
+        `the deployment did not appear in Azure's Activity Log within the wait budget (${attempt} attempt(s); last observation ${obs.id} was unknown)`,
+        res.status,
+        false,
+        "AZURE_EFFECT_UNKNOWN"
+      );
+    }
+    await sleep(Math.min(pollMs, remaining));
+  }
+}
+async function establishAzureEffect(args, deps = {}) {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const apiUrl = base(args.apiUrl);
+  let res;
+  try {
+    res = await fetchImpl(`${apiUrl}/v1-consequential-operations/establish-effect`, {
+      method: "POST",
+      headers: headers(apiUrl, args.apiKey),
+      body: JSON.stringify({
+        operation_id: args.operationId,
+        attempt_id: args.attemptId,
+        azure_observation_id: args.observationId
+      })
+    });
+  } catch (err) {
+    return {
+      established: false,
+      state: "establish_unreachable",
+      verdict: null,
+      reason: err instanceof Error ? err.message : String(err),
+      httpStatus: 0
+    };
+  }
+  const text = await res.text();
+  const json = parseJson(text);
+  const ee = json?.["effect_establishment"];
+  const state = str(json?.["state"]) ?? `establish_http_${res.status}`;
+  const verdict = str(ee?.["verdict"]);
+  const established = res.status === 200 && state === "succeeded" && verdict === "established";
+  return {
+    established,
+    state,
+    verdict,
+    reason: str(ee?.["reason"]) ?? (established ? null : boundedDetail(json, text) || null),
+    httpStatus: res.status
+  };
+}
+
+// src/gate.ts
 var GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 var RESOURCE_GROUP_RE = /^[-\w.()]{1,90}$/;
 var DEPLOYMENT_NAME_RE = /^[-\w.()]{1,64}$/;
@@ -8062,7 +8359,12 @@ function parseInputs(env) {
   const waitForApproval = (env.waitForApprovalRaw ?? "false").trim().toLowerCase() === "true";
   const maxWaitMinutesParsed = parseInt((env.maxWaitMinutesRaw ?? "30").trim(), 10);
   const maxWaitMinutes = Number.isFinite(maxWaitMinutesParsed) && maxWaitMinutesParsed > 0 ? maxWaitMinutesParsed : 30;
-  const mode = (env.modeRaw ?? "").trim().toLowerCase() === "evaluate-only" ? "evaluate-only" : "enforce";
+  const modeText = (env.modeRaw ?? "").trim().toLowerCase();
+  const MODES = ["enforce", "evaluate-only", "admit-operation", "establish-effect"];
+  if (modeText && !MODES.includes(modeText)) {
+    throw new GateInputError(`Unknown mode "${modeText}" (expected one of: ${MODES.join(", ")})`);
+  }
+  const mode = modeText || "enforce";
   const verifyPermitOnly = (env.verifyPermitRaw ?? "false").trim().toLowerCase() === "true";
   const permitToken = (env.permitTokenRaw ?? "").trim() || void 0;
   if (verifyPermitOnly && !permitToken) {
@@ -8070,12 +8372,64 @@ function parseInputs(env) {
       "Missing required input: permitToken (required when verifyPermit is 'true' \u2014 pass the permitToken output from an earlier mode: evaluate-only task invocation)."
     );
   }
+  const targetId = (env.targetId ?? "").trim() || void 0;
+  const extra = {};
+  if (!verifyPermitOnly && mode === "admit-operation") {
+    if (!permitToken) {
+      throw new GateInputError("Missing required input: permitToken (the permitToken output of the evaluate-only step)");
+    }
+    const hash = (env.executionHashRaw ?? "").trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(hash)) {
+      throw new GateInputError(
+        "Missing or malformed input: executionHash (the executionHash output of the evaluate-only step, 64 hex characters)"
+      );
+    }
+    if (!targetId) {
+      throw new GateInputError("Missing required input: targetId (the admitted operation is bound to it; give the same value as the evaluate-only step)");
+    }
+    if (!azure || !azure.deployment_name) {
+      throw new GateInputError(
+        "admit-operation needs azureSubscriptionId, azureResourceGroup and azureDeploymentName, the same values as the evaluate-only step: AtlaSent can close an Azure operation only for the ARM deployment its decision named"
+      );
+    }
+    extra.executionHash = hash;
+  }
+  if (!verifyPermitOnly && mode === "establish-effect") {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const operationId = (env.operationIdRaw ?? "").trim();
+    const attemptId = (env.attemptIdRaw ?? "").trim();
+    if (!uuid.test(operationId) || !uuid.test(attemptId)) {
+      throw new GateInputError("Missing or malformed input: operationId and attemptId (the outputs of the admit-operation step)");
+    }
+    const deploymentOutcome = normalizeDeploymentOutcome(env.deploymentOutcomeRaw ?? "succeeded");
+    const evaluationId = (env.evaluationIdRaw ?? "").trim();
+    const correlationId = (env.correlationIdRaw ?? "").trim();
+    if (deploymentOutcome === "succeeded") {
+      if (!evaluationId) {
+        throw new GateInputError("Missing required input: evaluationId (the evaluationId output of the evaluate-only step)");
+      }
+      if (!uuid.test(correlationId)) {
+        throw new GateInputError(
+          "Missing or malformed input: correlationId (the ARM deployment's correlation id, e.g. `az deployment group create ... --query properties.correlationId -o tsv`)"
+        );
+      }
+    }
+    const waitParsed = parseInt((env.effectWaitMinutesRaw ?? "15").trim(), 10);
+    Object.assign(extra, {
+      operationId: operationId.toLowerCase(),
+      attemptId: attemptId.toLowerCase(),
+      evaluationId: evaluationId || void 0,
+      correlationId: correlationId.toLowerCase() || void 0,
+      deploymentOutcome,
+      effectWaitMinutes: Number.isFinite(waitParsed) && waitParsed > 0 ? Math.min(waitParsed, 120) : 15
+    });
+  }
   return {
     apiKey,
     apiUrl: (env.apiUrl ?? "").trim() || void 0,
     action,
     actor,
-    targetId: (env.targetId ?? "").trim() || void 0,
+    targetId,
     environment,
     context,
     approvalsFrom,
@@ -8083,7 +8437,9 @@ function parseInputs(env) {
     maxWaitMinutes,
     mode,
     verifyPermitOnly,
-    permitToken
+    permitToken,
+    ...azure ? { azure } : {},
+    ...extra
   };
 }
 function emptyOutputs() {
@@ -8094,22 +8450,32 @@ function emptyOutputs() {
     proofHash: "",
     riskScore: "",
     evaluationId: "",
-    waitedForApproval: "false"
+    waitedForApproval: "false",
+    executionHash: "",
+    operationId: "",
+    attemptId: "",
+    operationKey: "",
+    admissionOutcomeUnknown: "false",
+    azureObservationId: "",
+    effectState: "",
+    effectEstablished: "false"
   };
 }
 function decisionOutputs(d, waitedForApproval) {
   return {
+    ...emptyOutputs(),
     decision: d.decision,
     verified: "false",
     permitToken: d.permitToken ?? "",
     proofHash: d.proofHash ?? "",
     riskScore: d.riskScore != null ? String(d.riskScore) : "",
     evaluationId: d.evaluationId ?? "",
-    waitedForApproval: waitedForApproval ? "true" : "false"
+    waitedForApproval: waitedForApproval ? "true" : "false",
+    executionHash: d.executionHashExpected ?? ""
   };
 }
 function describeError(err) {
-  if (err instanceof import_enforce.EnforceError)
+  if (err instanceof import_enforce2.EnforceError)
     return err.message;
   if (err instanceof Error)
     return err.message;
@@ -8127,47 +8493,42 @@ async function runGate(inputs, log) {
     // Re-present every binding provided here at verify, or fail closed
     // (MISSING_BINDING) rather than silently drop it — same contract the
     // GitHub Action's single-eval path uses.
-    requiredBindings: (0, import_enforce.requiredBindingsFor)({
+    requiredBindings: (0, import_enforce2.requiredBindingsFor)({
       environment: inputs.environment,
       targetId: inputs.targetId
     })
   };
+  if (inputs.azure && (inputs.verifyPermitOnly || inputs.mode === "enforce")) {
+    return {
+      ok: false,
+      message: `AtlaSent Gate: an Azure-scoped step must not consume its permit with a plain verify (${inputs.verifyPermitOnly ? "verifyPermit: true" : "mode: enforce"}), because that leaves the deployment with no Consequential Operation for its effect to close. Use mode: evaluate-only, then mode: admit-operation immediately before the deployment, then mode: establish-effect after it. Nothing was evaluated or consumed (fail-closed).`,
+      outputs: emptyOutputs()
+    };
+  }
+  if (!inputs.verifyPermitOnly && inputs.mode === "admit-operation")
+    return runAdmitOperation(inputs, log);
+  if (!inputs.verifyPermitOnly && inputs.mode === "establish-effect")
+    return runEstablishEffect(inputs, log);
   if (inputs.verifyPermitOnly) {
     const permitToken = inputs.permitToken;
     log.info(
       `AtlaSent Gate: re-verifying permit at the execution boundary for "${inputs.action}" (actor=${inputs.actor}, environment=${inputs.environment}` + (inputs.targetId ? `, target=${inputs.targetId}` : "") + ")."
     );
     try {
-      const r = await (0, import_enforce.reverifyPermit)(config, permitToken);
+      const r = await (0, import_enforce2.reverifyPermit)(config, permitToken);
       log.info(
         `AtlaSent Gate: permit re-verified at the execution boundary` + (r.outcome ? ` (outcome=${r.outcome})` : "") + ". Proceeding."
       );
       return {
         ok: true,
         message: "AtlaSent Gate: permit re-verified at the execution boundary.",
-        outputs: {
-          decision: "allow",
-          verified: "true",
-          permitToken,
-          proofHash: "",
-          riskScore: "",
-          evaluationId: "",
-          waitedForApproval: "false"
-        }
+        outputs: { ...emptyOutputs(), decision: "allow", verified: "true", permitToken }
       };
     } catch (err) {
       return {
         ok: false,
         message: `AtlaSent Gate: ${describeError(err)}. Deploy blocked at execution boundary (fail-closed).`,
-        outputs: {
-          decision: "deny",
-          verified: "false",
-          permitToken,
-          proofHash: "",
-          riskScore: "",
-          evaluationId: "",
-          waitedForApproval: "false"
-        }
+        outputs: { ...emptyOutputs(), decision: "deny", verified: "false", permitToken }
       };
     }
   }
@@ -8178,7 +8539,7 @@ async function runGate(inputs, log) {
   }
   let decision;
   try {
-    decision = await (0, import_enforce.evaluate)(config);
+    decision = await (0, import_enforce2.evaluate)(config);
   } catch (err) {
     return {
       ok: false,
@@ -8197,7 +8558,7 @@ async function runGate(inputs, log) {
     );
     let resolution;
     try {
-      resolution = await (0, import_enforce.waitForApprovalResolution)({
+      resolution = await (0, import_enforce2.waitForApprovalResolution)({
         apiKey: inputs.apiKey,
         apiUrl: inputs.apiUrl,
         approvalId: decision.approvalRequestId,
@@ -8221,7 +8582,7 @@ async function runGate(inputs, log) {
     decision = { ...decision, decision: "allow", permitToken: resolution.permitToken };
   }
   try {
-    (0, import_enforce.verify)(decision);
+    (0, import_enforce2.verify)(decision);
   } catch (err) {
     return {
       ok: false,
@@ -8231,6 +8592,11 @@ async function runGate(inputs, log) {
   }
   if (inputs.mode === "evaluate-only") {
     const outputs2 = decisionOutputs(decision, waitedForApproval);
+    if (inputs.azure && !inputs.azure.deployment_name) {
+      log.warning(
+        "AtlaSent Gate: this Azure-scoped permit names no ARM deployment (azureDeploymentName). mode: admit-operation will refuse it, because AtlaSent can establish an Azure effect only for the deployment the decision named."
+      );
+    }
     log.info(
       "AtlaSent Gate: permit issued (not yet verified/consumed) \u2014 re-verify it at the execution boundary with verifyPermit: true before the protected step runs."
     );
@@ -8238,7 +8604,7 @@ async function runGate(inputs, log) {
   }
   let verifyOutcome;
   try {
-    const vp = await (0, import_enforce.verifyPermit)(config, decision);
+    const vp = await (0, import_enforce2.verifyPermit)(config, decision);
     verifyOutcome = vp.outcome;
   } catch (err) {
     return {
@@ -8253,6 +8619,127 @@ async function runGate(inputs, log) {
     `AtlaSent Gate: allowed and verified` + (verifyOutcome ? ` (outcome=${verifyOutcome})` : "") + "."
   );
   return { ok: true, message: "AtlaSent Gate: allowed and verified.", outputs };
+}
+async function runAdmitOperation(inputs, log) {
+  const permitToken = inputs.permitToken;
+  const azure = inputs.azure;
+  log.info(
+    `AtlaSent Gate: admitting "${inputs.action}" as an Azure Consequential Operation (subscription=${azure.subscription_id}, resource group=${azure.resource_group}, deployment=${azure.deployment_name}, target=${inputs.targetId}).`
+  );
+  try {
+    const r = await admitAzureOperation({
+      apiUrl: inputs.apiUrl,
+      apiKey: inputs.apiKey,
+      permitToken,
+      actionType: inputs.action,
+      actorId: inputs.actor,
+      targetId: inputs.targetId,
+      environment: inputs.environment,
+      payloadHash: inputs.executionHash,
+      azure
+    });
+    log.info(
+      `AtlaSent Gate: permit consumed and operation admitted (operation_id=${r.operationId}, attempt_id=${r.attemptId}). Run the deployment named "${azure.deployment_name}" now, then establish its effect with mode: establish-effect.`
+    );
+    return {
+      ok: true,
+      message: "AtlaSent Gate: permit consumed and Azure operation admitted.",
+      outputs: {
+        ...emptyOutputs(),
+        decision: "allow",
+        verified: "true",
+        permitToken,
+        evaluationId: inputs.evaluationId ?? "",
+        executionHash: inputs.executionHash ?? "",
+        operationId: r.operationId,
+        attemptId: r.attemptId,
+        operationKey: r.operationKey
+      }
+    };
+  } catch (err) {
+    const e = err instanceof AzureOperationError ? err : null;
+    return {
+      ok: false,
+      message: `AtlaSent Gate: Azure operation NOT admitted${e?.code ? ` (code=${e.code})` : ""}: ${describeError(err)}. Do not run the deployment (fail-closed).`,
+      outputs: {
+        ...emptyOutputs(),
+        decision: "deny",
+        permitToken,
+        admissionOutcomeUnknown: e?.outcomeUnknown ? "true" : "false"
+      }
+    };
+  }
+}
+async function runEstablishEffect(inputs, log) {
+  const base2 = {
+    ...emptyOutputs(),
+    evaluationId: inputs.evaluationId ?? "",
+    operationId: inputs.operationId ?? "",
+    attemptId: inputs.attemptId ?? ""
+  };
+  const operationId = inputs.operationId;
+  const attemptId = inputs.attemptId;
+  if (inputs.deploymentOutcome !== "succeeded") {
+    const outcome = inputs.deploymentOutcome === "failed" ? "failed" : "unknown";
+    const r = await recordNonSuccess({
+      apiUrl: inputs.apiUrl,
+      apiKey: inputs.apiKey,
+      operationId,
+      attemptId,
+      outcome,
+      detail: outcome
+    });
+    const recorded = r.status >= 200 && r.status < 300;
+    return {
+      ok: false,
+      message: `AtlaSent Gate: the deployment was reported ${outcome}; its effect was NOT established. ` + (recorded ? `The attempt was recorded as ${outcome}${r.state ? ` (operation state=${r.state})` : ""}.` : `Recording the ${outcome} outcome also failed (HTTP ${r.status || "unreachable"}); the operation stays open.`),
+      outputs: { ...base2, effectState: r.state ?? `record_attempt_http_${r.status}` }
+    };
+  }
+  log.info(
+    `AtlaSent Gate: asking AtlaSent to read Azure's Activity Log for correlation id ${inputs.correlationId} (waiting up to ${inputs.effectWaitMinutes}m for the event to appear).`
+  );
+  let observationId;
+  try {
+    const obs = await recordAzureEffect({
+      apiUrl: inputs.apiUrl,
+      apiKey: inputs.apiKey,
+      requestId: inputs.evaluationId,
+      correlationId: inputs.correlationId,
+      waitMs: (inputs.effectWaitMinutes ?? 15) * 6e4
+    });
+    observationId = obs.id;
+  } catch (err) {
+    const e = err instanceof AzureOperationError ? err : null;
+    return {
+      ok: false,
+      message: `AtlaSent Gate: the deployment's effect was NOT verified${e?.code ? ` (code=${e.code})` : ""}: ${describeError(err)}. The operation stays open; do not report this change as verified.`,
+      outputs: { ...base2, effectState: e?.code ?? "effect_verify_failed" }
+    };
+  }
+  log.info(`AtlaSent Gate: Activity Log observation ${observationId} is verified and bound; establishing the effect.`);
+  const est = await establishAzureEffect({
+    apiUrl: inputs.apiUrl,
+    apiKey: inputs.apiKey,
+    operationId,
+    attemptId,
+    observationId
+  });
+  const outputs = {
+    ...base2,
+    azureObservationId: observationId,
+    effectState: est.state,
+    effectEstablished: est.established ? "true" : "false"
+  };
+  if (!est.established) {
+    return {
+      ok: false,
+      message: `AtlaSent Gate: the runtime did NOT establish the effect (HTTP ${est.httpStatus || "unreachable"}, state=${est.state}${est.verdict ? `, verdict=${est.verdict}` : ""}${est.reason ? `, reason=${est.reason}` : ""}). The operation stays open; do not report this change as verified.`,
+      outputs
+    };
+  }
+  log.info(`AtlaSent Gate: effect established by the runtime (operation ${operationId} succeeded).`);
+  return { ok: true, message: "AtlaSent Gate: Azure deployment effect established.", outputs };
 }
 
 // src/index.ts
@@ -8281,6 +8768,20 @@ function setOutputs(outputs) {
   console.log(
     `##vso[task.setvariable variable=waitedForApproval;isOutput=true]${outputs.waitedForApproval}`
   );
+  const plain = [
+    "executionHash",
+    "operationId",
+    "attemptId",
+    "operationKey",
+    "admissionOutcomeUnknown",
+    "azureObservationId",
+    "effectState",
+    "effectEstablished"
+  ];
+  for (const name of plain) {
+    tl.setVariable(name, outputs[name], false, true);
+    console.log(`##vso[task.setvariable variable=${name};isOutput=true]${outputs[name]}`);
+  }
 }
 async function main() {
   const rawApiKey = process.env["ATLASENT_API_KEY"];
@@ -8315,6 +8816,13 @@ async function main() {
     azureSubscriptionIdRaw: tl.getInput("azureSubscriptionId", false),
     azureResourceGroupRaw: tl.getInput("azureResourceGroup", false),
     azureDeploymentNameRaw: tl.getInput("azureDeploymentName", false),
+    executionHashRaw: tl.getInput("executionHash", false),
+    operationIdRaw: tl.getInput("operationId", false),
+    attemptIdRaw: tl.getInput("attemptId", false),
+    evaluationIdRaw: tl.getInput("evaluationId", false),
+    correlationIdRaw: tl.getInput("correlationId", false),
+    deploymentOutcomeRaw: tl.getInput("deploymentOutcome", false),
+    effectWaitMinutesRaw: tl.getInput("effectWaitMinutes", false),
     run: {
       organization_url: tl.getVariable("System.CollectionUri"),
       project: tl.getVariable("System.TeamProject"),
@@ -8328,15 +8836,7 @@ async function main() {
   try {
     inputs = parseInputs(env);
   } catch (err) {
-    setOutputs({
-      decision: "",
-      verified: "false",
-      permitToken: "",
-      proofHash: "",
-      riskScore: "",
-      evaluationId: "",
-      waitedForApproval: "false"
-    });
+    setOutputs(emptyOutputs());
     const message = err instanceof GateInputError ? `AtlaSent Gate: ${err.message}` : `AtlaSent Gate: unexpected input error: ${err instanceof Error ? err.message : String(err)}`;
     tl.setResult(tl.TaskResult.Failed, message);
     return;

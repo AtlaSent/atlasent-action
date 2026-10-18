@@ -3,13 +3,13 @@
   "id": "5daffd2d-c61f-48d5-841d-8064b27b7e7a",
   "name": "AtlaSentGate",
   "friendlyName": "AtlaSent Gate",
-  "description": "Enforce a real-time AtlaSent authorization gate before a deployment or other critical pipeline step runs (evaluate -> verify -> permit, fail-closed)",
+  "description": "Enforce a real-time AtlaSent authorization gate before a deployment or other critical pipeline step runs (evaluate -> verify -> permit, fail-closed); for Azure deployments, admit and close a Consequential Operation from Azure's own Activity Log",
   "helpMarkDown": "See https://github.com/Atlasent/atlasent-action/tree/main/packages/azure-devops-task for the full input/output reference and pipeline examples. Requires the ATLASENT_API_KEY secret and (optionally) ATLASENT_BASE_URL to be set as environment variables on this task step.",
   "category": "Utility",
   "author": "AtlaSent Systems, Inc.",
   "version": {
     "Major": 1,
-    "Minor": 2,
+    "Minor": 3,
     "Patch": 0
   },
   "instanceNameFormat": "AtlaSent Gate: $(action)",
@@ -31,10 +31,12 @@
       "required": false,
       "defaultValue": "enforce",
       "options": {
-        "enforce": "enforce (evaluate + verify + consume in one step)",
-        "evaluate-only": "evaluate-only (issue a permit without consuming it)"
+        "enforce": "enforce (evaluate + verify + consume in one step; not allowed for an Azure scope)",
+        "evaluate-only": "evaluate-only (issue a permit without consuming it)",
+        "admit-operation": "admit-operation (Azure: consume the permit and admit an operation, before the deployment)",
+        "establish-effect": "establish-effect (Azure: verify the deployment in the Activity Log and close the operation)"
       },
-      "helpMarkDown": "'enforce' (default) performs evaluate -> verify -> verify-permit in this task step. 'evaluate-only' issues a permit WITHOUT verifying/consuming it, for a later task step (verifyPermit: true) to re-verify immediately before the protected step actually runs — the stronger execution-boundary pattern. Ignored when verifyPermit is 'true'.",
+      "helpMarkDown": "'enforce' (default) performs evaluate -> verify -> verify-permit in this task step. 'evaluate-only' issues a permit WITHOUT consuming it. For an Azure deployment (azureSubscriptionId/azureResourceGroup given) the path is: 'evaluate-only', then 'admit-operation' immediately before the deployment (consumes the permit and admits a Consequential Operation in one runtime transaction; run the deployment only if this step succeeds), then 'establish-effect' after it (AtlaSent reads Azure's Activity Log for the deployment's correlation id and the runtime closes the operation only from that evidence). 'enforce' and verifyPermit are refused for an Azure scope. Ignored when verifyPermit is 'true'.",
       "visibleRule": "verifyPermit = false"
     },
     {
@@ -43,15 +45,15 @@
       "label": "Verify permit (execution boundary)",
       "required": false,
       "defaultValue": "false",
-      "helpMarkDown": "When true, this task step does NOT call evaluate at all — it re-verifies (and consumes) an already-issued permit token immediately before a protected step, independent of the step that issued it. Requires permitToken, and the same action/actor/environment/targetId the permit was issued for."
+      "helpMarkDown": "When true, this task step does NOT call evaluate at all — it re-verifies (and consumes) an already-issued permit token immediately before a protected step, independent of the step that issued it. Requires permitToken, and the same action/actor/environment/targetId the permit was issued for. Not allowed for an Azure-scoped step: use mode admit-operation instead, so the deployment is recorded as a Consequential Operation."
     },
     {
       "name": "permitToken",
       "type": "string",
       "label": "Permit token to verify",
       "required": false,
-      "helpMarkDown": "Required when verifyPermit is 'true': the permitToken output from an earlier mode: evaluate-only task step.",
-      "visibleRule": "verifyPermit = true"
+      "helpMarkDown": "Required when verifyPermit is 'true' or mode is 'admit-operation': the permitToken output from an earlier mode: evaluate-only task step.",
+      "visibleRule": "verifyPermit = true || mode = admit-operation"
     },
     {
       "name": "actor",
@@ -93,7 +95,65 @@
       "type": "string",
       "label": "Azure deployment name",
       "required": false,
-      "helpMarkDown": "Optional, recommended. The ARM deployment name this step will use (az deployment group create --name). Requires azureSubscriptionId and azureResourceGroup. AtlaSent stores it with the decision, so only that deployment can later verify the decision's effect in Azure's Activity Log."
+      "helpMarkDown": "The ARM deployment name this step will use (az deployment group create --name). Requires azureSubscriptionId and azureResourceGroup. Required for mode admit-operation: AtlaSent stores it with the decision, and only that deployment can later establish the decision's effect from Azure's Activity Log."
+    },
+    {
+      "name": "executionHash",
+      "type": "string",
+      "label": "Execution hash",
+      "required": false,
+      "visibleRule": "mode = admit-operation",
+      "helpMarkDown": "Required for mode admit-operation: the executionHash output of the evaluate-only step (the payload binding the runtime put in the permit). Pass it unchanged."
+    },
+    {
+      "name": "operationId",
+      "type": "string",
+      "label": "Operation ID",
+      "required": false,
+      "visibleRule": "mode = establish-effect",
+      "helpMarkDown": "Required for mode establish-effect: the operationId output of the admit-operation step."
+    },
+    {
+      "name": "attemptId",
+      "type": "string",
+      "label": "Attempt ID",
+      "required": false,
+      "visibleRule": "mode = establish-effect",
+      "helpMarkDown": "Required for mode establish-effect: the attemptId output of the admit-operation step."
+    },
+    {
+      "name": "evaluationId",
+      "type": "string",
+      "label": "Evaluation ID",
+      "required": false,
+      "visibleRule": "mode = establish-effect",
+      "helpMarkDown": "Required for mode establish-effect when the deployment succeeded: the evaluationId output of the evaluate-only step."
+    },
+    {
+      "name": "correlationId",
+      "type": "string",
+      "label": "Deployment correlation ID",
+      "required": false,
+      "visibleRule": "mode = establish-effect",
+      "helpMarkDown": "Required for mode establish-effect when the deployment succeeded: the ARM deployment's correlation id (az deployment group create ... --query properties.correlationId -o tsv)."
+    },
+    {
+      "name": "deploymentOutcome",
+      "type": "string",
+      "label": "Deployment outcome",
+      "required": false,
+      "defaultValue": "succeeded",
+      "visibleRule": "mode = establish-effect",
+      "helpMarkDown": "For mode establish-effect: 'succeeded', 'failed' or 'unknown' (Agent.JobStatus values are accepted). Anything but succeeded is recorded on the attempt as failure/unknown and fails this step; it never establishes an effect."
+    },
+    {
+      "name": "effectWaitMinutes",
+      "type": "string",
+      "label": "Effect wait minutes",
+      "required": false,
+      "defaultValue": "15",
+      "visibleRule": "mode = establish-effect",
+      "helpMarkDown": "For mode establish-effect: how long to keep asking while Azure's Activity Log has not yet surfaced the deployment (max 120). Exceeding it fails closed."
     },
     {
       "name": "context",
@@ -175,6 +235,38 @@
     {
       "name": "waitedForApproval",
       "description": "\"true\" when a hold/escalate decision was paused and waited on for a human resolution."
+    },
+    {
+      "name": "executionHash",
+      "description": "The payload binding the runtime put in the permit (evaluate-only). Pass it to mode admit-operation."
+    },
+    {
+      "name": "operationId",
+      "description": "admit-operation: the admitted Consequential Operation id."
+    },
+    {
+      "name": "attemptId",
+      "description": "admit-operation: the admitted attempt id."
+    },
+    {
+      "name": "operationKey",
+      "description": "admit-operation: the idempotency key (a digest of the permit) to look the operation up by."
+    },
+    {
+      "name": "admissionOutcomeUnknown",
+      "description": "\"true\" when admission may have committed with the response lost. Do not deploy and do not mint a fresh permit; look the operation up first."
+    },
+    {
+      "name": "azureObservationId",
+      "description": "establish-effect: the Activity Log observation AtlaSent recorded."
+    },
+    {
+      "name": "effectState",
+      "description": "establish-effect: the operation state the runtime reported."
+    },
+    {
+      "name": "effectEstablished",
+      "description": "\"true\" only when the runtime established the deployment's effect."
     }
   ]
 }

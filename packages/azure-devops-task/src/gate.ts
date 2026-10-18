@@ -17,6 +17,13 @@
 // change-plan derivation, no approval-artifact minting, no
 // batch/policy-sync/release-mode/governance-agents/change-brief/posture-scan
 // modes. Single-eval only. See packages/azure-devops-task/README.md.
+//
+// An Azure-scoped step (azureSubscriptionId/azureResourceGroup given) runs as
+// a Consequential Operation instead (./azureOperation.ts): evaluate-only ->
+// admit-operation (consume-and-admit, provider "azure") -> the deployment ->
+// establish-effect (v1-azure-effect-verify, then establish-effect). A plain
+// consuming verify (enforce / verifyPermit) is refused for an Azure scope,
+// because it spends the permit with no operation for the effect to close.
 
 import {
   evaluate,
@@ -29,6 +36,16 @@ import {
   type Decision,
   type EnforceConfig,
 } from "@atlasent/enforce";
+import {
+  AzureOperationError,
+  admitAzureOperation,
+  establishAzureEffect,
+  normalizeDeploymentOutcome,
+  recordAzureEffect,
+  recordNonSuccess,
+  type AzureLocus,
+  type DeploymentOutcome,
+} from "./azureOperation";
 
 // ---------------------------------------------------------------------------
 // Logging
@@ -54,7 +71,7 @@ export const nullLogger: TaskLogger = {
 // ---------------------------------------------------------------------------
 
 export type ApprovalsFrom = "pr-reviews" | "none";
-export type GateMode = "enforce" | "evaluate-only";
+export type GateMode = "enforce" | "evaluate-only" | "admit-operation" | "establish-effect";
 
 export interface GateInputs {
   apiKey: string;
@@ -87,6 +104,18 @@ export interface GateInputs {
   /** Required when verifyPermitOnly is true: the permit token from an
    *  earlier mode: evaluate-only task invocation. */
   permitToken?: string;
+  /** The Azure scope bound into context.azure, when one was given. */
+  azure?: AzureLocus;
+  /** admit-operation: the evaluate-only step's executionHash output. */
+  executionHash?: string;
+  /** establish-effect inputs. */
+  operationId?: string;
+  attemptId?: string;
+  evaluationId?: string;
+  correlationId?: string;
+  deploymentOutcome?: DeploymentOutcome;
+  /** establish-effect: how long to keep asking while the Activity Log has not surfaced the event. */
+  effectWaitMinutes?: number;
 }
 
 /**
@@ -133,6 +162,18 @@ export interface RawGateEnv {
    *  `context.azure_devops` for audit and later correlation; they are the
    *  pipeline's own claims about itself, never authority. */
   run?: Partial<Record<keyof AzureDevOpsRunContext, string | undefined>>;
+  /** admit-operation: the evaluate-only step's executionHash output. */
+  executionHashRaw?: string | undefined;
+  /** establish-effect: the admit-operation step's operationId / attemptId outputs. */
+  operationIdRaw?: string | undefined;
+  attemptIdRaw?: string | undefined;
+  /** establish-effect: the evaluate-only step's evaluationId output. */
+  evaluationIdRaw?: string | undefined;
+  /** establish-effect: the ARM deployment's correlation id. */
+  correlationIdRaw?: string | undefined;
+  /** establish-effect: succeeded | failed | unknown, or an Agent.JobStatus value. */
+  deploymentOutcomeRaw?: string | undefined;
+  effectWaitMinutesRaw?: string | undefined;
 }
 
 /** Run metadata recorded under `context.azure_devops`. */
@@ -322,7 +363,14 @@ export function parseInputs(env: RawGateEnv): GateInputs {
   const maxWaitMinutes =
     Number.isFinite(maxWaitMinutesParsed) && maxWaitMinutesParsed > 0 ? maxWaitMinutesParsed : 30;
 
-  const mode: GateMode = (env.modeRaw ?? "").trim().toLowerCase() === "evaluate-only" ? "evaluate-only" : "enforce";
+  // An unrecognized mode is refused, never defaulted: a typo of
+  // "admit-operation" must not silently become a consuming "enforce".
+  const modeText = (env.modeRaw ?? "").trim().toLowerCase();
+  const MODES: readonly GateMode[] = ["enforce", "evaluate-only", "admit-operation", "establish-effect"];
+  if (modeText && !(MODES as readonly string[]).includes(modeText)) {
+    throw new GateInputError(`Unknown mode "${modeText}" (expected one of: ${MODES.join(", ")})`);
+  }
+  const mode: GateMode = (modeText || "enforce") as GateMode;
 
   const verifyPermitOnly = (env.verifyPermitRaw ?? "false").trim().toLowerCase() === "true";
   const permitToken = (env.permitTokenRaw ?? "").trim() || undefined;
@@ -333,12 +381,69 @@ export function parseInputs(env: RawGateEnv): GateInputs {
     );
   }
 
+  const targetId = (env.targetId ?? "").trim() || undefined;
+  const extra: Partial<GateInputs> = {};
+
+  if (!verifyPermitOnly && mode === "admit-operation") {
+    if (!permitToken) {
+      throw new GateInputError("Missing required input: permitToken (the permitToken output of the evaluate-only step)");
+    }
+    const hash = (env.executionHashRaw ?? "").trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(hash)) {
+      throw new GateInputError(
+        "Missing or malformed input: executionHash (the executionHash output of the evaluate-only step, 64 hex characters)",
+      );
+    }
+    if (!targetId) {
+      throw new GateInputError("Missing required input: targetId (the admitted operation is bound to it; give the same value as the evaluate-only step)");
+    }
+    if (!azure || !azure.deployment_name) {
+      throw new GateInputError(
+        "admit-operation needs azureSubscriptionId, azureResourceGroup and azureDeploymentName, the same values as the " +
+          "evaluate-only step: AtlaSent can close an Azure operation only for the ARM deployment its decision named",
+      );
+    }
+    extra.executionHash = hash;
+  }
+
+  if (!verifyPermitOnly && mode === "establish-effect") {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const operationId = (env.operationIdRaw ?? "").trim();
+    const attemptId = (env.attemptIdRaw ?? "").trim();
+    if (!uuid.test(operationId) || !uuid.test(attemptId)) {
+      throw new GateInputError("Missing or malformed input: operationId and attemptId (the outputs of the admit-operation step)");
+    }
+    const deploymentOutcome = normalizeDeploymentOutcome(env.deploymentOutcomeRaw ?? "succeeded");
+    const evaluationId = (env.evaluationIdRaw ?? "").trim();
+    const correlationId = (env.correlationIdRaw ?? "").trim();
+    if (deploymentOutcome === "succeeded") {
+      if (!evaluationId) {
+        throw new GateInputError("Missing required input: evaluationId (the evaluationId output of the evaluate-only step)");
+      }
+      if (!uuid.test(correlationId)) {
+        throw new GateInputError(
+          "Missing or malformed input: correlationId (the ARM deployment's correlation id, e.g. " +
+            "`az deployment group create ... --query properties.correlationId -o tsv`)",
+        );
+      }
+    }
+    const waitParsed = parseInt((env.effectWaitMinutesRaw ?? "15").trim(), 10);
+    Object.assign(extra, {
+      operationId: operationId.toLowerCase(),
+      attemptId: attemptId.toLowerCase(),
+      evaluationId: evaluationId || undefined,
+      correlationId: correlationId.toLowerCase() || undefined,
+      deploymentOutcome,
+      effectWaitMinutes: Number.isFinite(waitParsed) && waitParsed > 0 ? Math.min(waitParsed, 120) : 15,
+    });
+  }
+
   return {
     apiKey,
     apiUrl: (env.apiUrl ?? "").trim() || undefined,
     action,
     actor,
-    targetId: (env.targetId ?? "").trim() || undefined,
+    targetId,
     environment,
     context,
     approvalsFrom,
@@ -347,6 +452,8 @@ export function parseInputs(env: RawGateEnv): GateInputs {
     mode,
     verifyPermitOnly,
     permitToken,
+    ...(azure ? { azure } : {}),
+    ...extra,
   };
 }
 
@@ -365,6 +472,19 @@ export interface GateOutputs {
   riskScore: string;
   evaluationId: string;
   waitedForApproval: string; // "true" | "false"
+  /** The payload binding the runtime put in the permit (execution_hash_expected). */
+  executionHash: string;
+  /** admit-operation: the admitted Consequential Operation. */
+  operationId: string;
+  attemptId: string;
+  operationKey: string;
+  /** "true" when admission may have committed with the response lost. */
+  admissionOutcomeUnknown: string;
+  /** establish-effect: the recorded Activity Log observation and the runtime's answer. */
+  azureObservationId: string;
+  effectState: string;
+  /** "true" only when the runtime established the effect. */
+  effectEstablished: string;
 }
 
 export function emptyOutputs(): GateOutputs {
@@ -376,11 +496,20 @@ export function emptyOutputs(): GateOutputs {
     riskScore: "",
     evaluationId: "",
     waitedForApproval: "false",
+    executionHash: "",
+    operationId: "",
+    attemptId: "",
+    operationKey: "",
+    admissionOutcomeUnknown: "false",
+    azureObservationId: "",
+    effectState: "",
+    effectEstablished: "false",
   };
 }
 
 function decisionOutputs(d: Decision, waitedForApproval: boolean): GateOutputs {
   return {
+    ...emptyOutputs(),
     decision: d.decision,
     verified: "false",
     permitToken: d.permitToken ?? "",
@@ -388,6 +517,7 @@ function decisionOutputs(d: Decision, waitedForApproval: boolean): GateOutputs {
     riskScore: d.riskScore != null ? String(d.riskScore) : "",
     evaluationId: d.evaluationId ?? "",
     waitedForApproval: waitedForApproval ? "true" : "false",
+    executionHash: d.executionHashExpected ?? "",
   };
 }
 
@@ -427,6 +557,22 @@ export async function runGate(inputs: GateInputs, log: TaskLogger): Promise<Gate
     }),
   };
 
+  // ── Azure scope: a Consequential Operation, never a plain consuming verify ─
+  if (inputs.azure && (inputs.verifyPermitOnly || inputs.mode === "enforce")) {
+    return {
+      ok: false,
+      message:
+        "AtlaSent Gate: an Azure-scoped step must not consume its permit with a plain verify " +
+        `(${inputs.verifyPermitOnly ? "verifyPermit: true" : "mode: enforce"}), because that leaves the deployment with ` +
+        "no Consequential Operation for its effect to close. Use mode: evaluate-only, then mode: admit-operation " +
+        "immediately before the deployment, then mode: establish-effect after it. Nothing was evaluated or consumed " +
+        "(fail-closed).",
+      outputs: emptyOutputs(),
+    };
+  }
+  if (!inputs.verifyPermitOnly && inputs.mode === "admit-operation") return runAdmitOperation(inputs, log);
+  if (!inputs.verifyPermitOnly && inputs.mode === "establish-effect") return runEstablishEffect(inputs, log);
+
   // ── Execution-boundary mode: verify (and consume) an already-issued
   // permit from an earlier `mode: evaluate-only` task invocation. No
   // evaluate() call at all — see reverifyPermit()'s own doc comment in
@@ -447,29 +593,13 @@ export async function runGate(inputs: GateInputs, log: TaskLogger): Promise<Gate
       return {
         ok: true,
         message: "AtlaSent Gate: permit re-verified at the execution boundary.",
-        outputs: {
-          decision: "allow",
-          verified: "true",
-          permitToken,
-          proofHash: "",
-          riskScore: "",
-          evaluationId: "",
-          waitedForApproval: "false",
-        },
+        outputs: { ...emptyOutputs(), decision: "allow", verified: "true", permitToken },
       };
     } catch (err) {
       return {
         ok: false,
         message: `AtlaSent Gate: ${describeError(err)}. Deploy blocked at execution boundary (fail-closed).`,
-        outputs: {
-          decision: "deny",
-          verified: "false",
-          permitToken,
-          proofHash: "",
-          riskScore: "",
-          evaluationId: "",
-          waitedForApproval: "false",
-        },
+        outputs: { ...emptyOutputs(), decision: "deny", verified: "false", permitToken },
       };
     }
   }
@@ -573,6 +703,12 @@ export async function runGate(inputs: GateInputs, log: TaskLogger): Promise<Gate
   // the protected step on THAT invocation's result, not this one.
   if (inputs.mode === "evaluate-only") {
     const outputs = decisionOutputs(decision, waitedForApproval);
+    if (inputs.azure && !inputs.azure.deployment_name) {
+      log.warning(
+        "AtlaSent Gate: this Azure-scoped permit names no ARM deployment (azureDeploymentName). mode: admit-operation " +
+          "will refuse it, because AtlaSent can establish an Azure effect only for the deployment the decision named.",
+      );
+    }
     log.info(
       "AtlaSent Gate: permit issued (not yet verified/consumed) — re-verify it at the " +
         "execution boundary with verifyPermit: true before the protected step runs.",
@@ -599,4 +735,163 @@ export async function runGate(inputs: GateInputs, log: TaskLogger): Promise<Gate
     `AtlaSent Gate: allowed and verified` + (verifyOutcome ? ` (outcome=${verifyOutcome})` : "") + ".",
   );
   return { ok: true, message: "AtlaSent Gate: allowed and verified.", outputs };
+}
+
+// ---------------------------------------------------------------------------
+// Azure Consequential Operation: admission and effect establishment
+// ---------------------------------------------------------------------------
+
+/**
+ * mode: admit-operation. Consume the evaluate-only permit AND admit a durable
+ * operation + attempt in one runtime transaction, immediately before the
+ * deployment. `ok` (and verified="true") only when the runtime returned both
+ * ids; the deployment step must be conditioned on this step succeeding.
+ */
+async function runAdmitOperation(inputs: GateInputs, log: TaskLogger): Promise<GateResult> {
+  const permitToken = inputs.permitToken as string; // guaranteed by parseInputs
+  const azure = inputs.azure as AzureLocus; // guaranteed by parseInputs
+  log.info(
+    `AtlaSent Gate: admitting "${inputs.action}" as an Azure Consequential Operation ` +
+      `(subscription=${azure.subscription_id}, resource group=${azure.resource_group}, ` +
+      `deployment=${azure.deployment_name}, target=${inputs.targetId}).`,
+  );
+  try {
+    const r = await admitAzureOperation({
+      apiUrl: inputs.apiUrl,
+      apiKey: inputs.apiKey,
+      permitToken,
+      actionType: inputs.action,
+      actorId: inputs.actor,
+      targetId: inputs.targetId as string,
+      environment: inputs.environment,
+      payloadHash: inputs.executionHash as string,
+      azure,
+    });
+    log.info(
+      `AtlaSent Gate: permit consumed and operation admitted (operation_id=${r.operationId}, attempt_id=${r.attemptId}). ` +
+        `Run the deployment named "${azure.deployment_name}" now, then establish its effect with mode: establish-effect.`,
+    );
+    return {
+      ok: true,
+      message: "AtlaSent Gate: permit consumed and Azure operation admitted.",
+      outputs: {
+        ...emptyOutputs(),
+        decision: "allow",
+        verified: "true",
+        permitToken,
+        evaluationId: inputs.evaluationId ?? "",
+        executionHash: inputs.executionHash ?? "",
+        operationId: r.operationId,
+        attemptId: r.attemptId,
+        operationKey: r.operationKey,
+      },
+    };
+  } catch (err) {
+    const e = err instanceof AzureOperationError ? err : null;
+    return {
+      ok: false,
+      message:
+        `AtlaSent Gate: Azure operation NOT admitted${e?.code ? ` (code=${e.code})` : ""}: ${describeError(err)}. ` +
+        "Do not run the deployment (fail-closed).",
+      outputs: {
+        ...emptyOutputs(),
+        decision: "deny",
+        permitToken,
+        admissionOutcomeUnknown: e?.outcomeUnknown ? "true" : "false",
+      },
+    };
+  }
+}
+
+/**
+ * mode: establish-effect. After the deployment: have AtlaSent read Azure's
+ * Activity Log for it (v1-azure-effect-verify) and then ask the runtime to
+ * establish the admitted operation's effect from that recorded observation.
+ * `ok` only when the runtime itself answers established; this task never
+ * reports success on its own. A failed or unknown deployment is reported as
+ * such (record-attempt) and the step fails.
+ */
+async function runEstablishEffect(inputs: GateInputs, log: TaskLogger): Promise<GateResult> {
+  const base = {
+    ...emptyOutputs(),
+    evaluationId: inputs.evaluationId ?? "",
+    operationId: inputs.operationId ?? "",
+    attemptId: inputs.attemptId ?? "",
+  };
+  const operationId = inputs.operationId as string;
+  const attemptId = inputs.attemptId as string;
+
+  if (inputs.deploymentOutcome !== "succeeded") {
+    const outcome = inputs.deploymentOutcome === "failed" ? "failed" : "unknown";
+    const r = await recordNonSuccess({
+      apiUrl: inputs.apiUrl,
+      apiKey: inputs.apiKey,
+      operationId,
+      attemptId,
+      outcome,
+      detail: outcome,
+    });
+    const recorded = r.status >= 200 && r.status < 300;
+    return {
+      ok: false,
+      message:
+        `AtlaSent Gate: the deployment was reported ${outcome}; its effect was NOT established. ` +
+        (recorded
+          ? `The attempt was recorded as ${outcome}${r.state ? ` (operation state=${r.state})` : ""}.`
+          : `Recording the ${outcome} outcome also failed (HTTP ${r.status || "unreachable"}); the operation stays open.`),
+      outputs: { ...base, effectState: r.state ?? `record_attempt_http_${r.status}` },
+    };
+  }
+
+  log.info(
+    `AtlaSent Gate: asking AtlaSent to read Azure's Activity Log for correlation id ${inputs.correlationId} ` +
+      `(waiting up to ${inputs.effectWaitMinutes}m for the event to appear).`,
+  );
+  let observationId: string;
+  try {
+    const obs = await recordAzureEffect({
+      apiUrl: inputs.apiUrl,
+      apiKey: inputs.apiKey,
+      requestId: inputs.evaluationId as string,
+      correlationId: inputs.correlationId as string,
+      waitMs: (inputs.effectWaitMinutes ?? 15) * 60_000,
+    });
+    observationId = obs.id;
+  } catch (err) {
+    const e = err instanceof AzureOperationError ? err : null;
+    return {
+      ok: false,
+      message:
+        `AtlaSent Gate: the deployment's effect was NOT verified${e?.code ? ` (code=${e.code})` : ""}: ${describeError(err)}. ` +
+        "The operation stays open; do not report this change as verified.",
+      outputs: { ...base, effectState: e?.code ?? "effect_verify_failed" },
+    };
+  }
+
+  log.info(`AtlaSent Gate: Activity Log observation ${observationId} is verified and bound; establishing the effect.`);
+  const est = await establishAzureEffect({
+    apiUrl: inputs.apiUrl,
+    apiKey: inputs.apiKey,
+    operationId,
+    attemptId,
+    observationId,
+  });
+  const outputs: GateOutputs = {
+    ...base,
+    azureObservationId: observationId,
+    effectState: est.state,
+    effectEstablished: est.established ? "true" : "false",
+  };
+  if (!est.established) {
+    return {
+      ok: false,
+      message:
+        `AtlaSent Gate: the runtime did NOT establish the effect (HTTP ${est.httpStatus || "unreachable"}, state=${est.state}` +
+        `${est.verdict ? `, verdict=${est.verdict}` : ""}${est.reason ? `, reason=${est.reason}` : ""}). ` +
+        "The operation stays open; do not report this change as verified.",
+      outputs,
+    };
+  }
+  log.info(`AtlaSent Gate: effect established by the runtime (operation ${operationId} succeeded).`);
+  return { ok: true, message: "AtlaSent Gate: Azure deployment effect established.", outputs };
 }
