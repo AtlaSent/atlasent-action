@@ -114,6 +114,10 @@ async function evaluate(config) {
         payload["state_snapshot"] = snap;
     if (config.changePlan != null)
         payload["change_plan"] = config.changePlan;
+    if (config.changeBrief != null) {
+        payload["change_brief_id"] = config.changeBrief.id;
+        payload["canonical_plan_digest"] = config.changeBrief.canonicalPlanDigest;
+    }
     if (config.evidenceProfile != null)
         payload["evidence_profile"] = config.evidenceProfile;
     if (config.quorum != null)
