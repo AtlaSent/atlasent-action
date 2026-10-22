@@ -2334,16 +2334,18 @@ function buildDeployReadback(result, exp) {
     source: response ? "runtime_establish_effect" : "none",
     runtime_state: result?.state ?? "none",
     runtime_verdict: runtimeVerdict,
-    operation_id: exp.operationId,
-    attempt_id: exp.attemptId,
+    operation_id: str(response?.["operation_id"]),
+    requested_operation_id: exp.operationId,
+    requested_attempt_id: exp.attemptId,
     workflow_run_id: str(evidence?.["workflow_run_id"]),
     deployment_id: str(mutation?.["deployment_id"]) ?? str(revision?.["deployment_id"]) ?? result?.deploymentId ?? null,
     deployment_status_id: str(mutation?.["status_id"]),
     deployment_state: str(mutation?.["state"]),
     deployment_occurred_at: str(mutation?.["occurred_at"]),
-    head_sha: str(revision?.["head_sha"]) ?? str(plan?.["head_sha"]),
+    // Observed at the mutation, never the authorized plan's own value.
+    head_sha: str(revision?.["head_sha"]),
     base_sha: str(plan?.["base_sha"]),
-    environment: str(revision?.["environment"]) ?? str(plan?.["environment"]),
+    environment: str(revision?.["environment"]),
     evaluation_id: str(auth?.["evaluation_id"]),
     decision_id: str(auth?.["decision_id"]),
     permit_token_hash: str(auth?.["permit_token_hash"]),
@@ -2377,10 +2379,16 @@ function buildDeployReadback(result, exp) {
     else if (actual.toLowerCase() !== expected.toLowerCase())
       disagreements.push(`${name} ${actual} != expected ${expected}`);
   };
+  if (!revision || !currentness) {
+    return done("incomplete", "the runtime returned no observed revision or artifact-currentness record, so the deployed artifact cannot be tied to the plan");
+  }
   if (record.deployment_state !== "success")
     disagreements.push(`native deployment state ${record.deployment_state ?? "absent"}`);
-  if (currentness && currentness["matches_verified_plan"] !== true)
+  if (currentness["matches_verified_plan"] !== true)
     disagreements.push("artifact does not match the verified plan");
+  check("deployment_id (status vs revision)", str(revision["deployment_id"]), str(mutation["deployment_id"]) ?? void 0);
+  check("operation_id", record.operation_id, exp.operationId);
+  check("environment", record.environment, exp.environment);
   check("workflow_run_id", record.workflow_run_id, exp.runId);
   check("head_sha", record.head_sha, exp.headSha);
   check("base_sha", record.base_sha, exp.baseSha);
@@ -2414,7 +2422,8 @@ function deployReadbackSummary(r) {
     row("environment", r.environment),
     row("evaluation", r.evaluation_id),
     row("permit hash", r.permit_token_hash),
-    row("operation / attempt", `${r.operation_id} / ${r.attempt_id}`),
+    row("operation (runtime)", r.operation_id),
+    row("requested operation / attempt", `${r.requested_operation_id} / ${r.requested_attempt_id}`),
     ""
   ].join("\n");
 }
@@ -4692,6 +4701,7 @@ async function runEstablishEffectStep(apiKey, apiUrl) {
     operationId,
     attemptId,
     deployJobResult,
+    environment: githubEnvironment,
     evaluationId: getInput("expected-evaluation-id") || void 0,
     permitHash: getInput("expected-permit-hash") || void 0
   };

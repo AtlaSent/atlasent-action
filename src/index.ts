@@ -1073,6 +1073,7 @@ async function runEstablishEffectStep(apiKey: string, apiUrl: string): Promise<v
     operationId,
     attemptId,
     deployJobResult,
+    environment: githubEnvironment,
     evaluationId: getInput("expected-evaluation-id") || undefined,
     permitHash: getInput("expected-permit-hash") || undefined,
   };

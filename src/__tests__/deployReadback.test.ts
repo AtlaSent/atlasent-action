@@ -11,6 +11,7 @@ const exp = {
   operationId: "op-1",
   attemptId: "att-1",
   deployJobResult: "success",
+  environment: "production",
   evaluationId: "eval-1",
   permitHash: "f".repeat(64),
 };
@@ -53,7 +54,9 @@ describe("buildDeployReadback", () => {
       evaluation_id: "eval-1",
       permit_token_hash: "f".repeat(64),
       operation_id: "op-1",
-      attempt_id: "att-1",
+      requested_operation_id: "op-1",
+      requested_attempt_id: "att-1",
+      environment: "production",
     });
   });
 
@@ -71,8 +74,30 @@ describe("buildDeployReadback", () => {
     ["a non-success native status", exp, { native_mutation: { deployment_id: "987", status_id: "1", state: "failure" } }],
     ["an artifact that does not match the plan", exp, { artifact_currentness: { matches_verified_plan: false } }],
     ["an evidence record missing the evaluation", exp, { authorization: { permit_token_hash: "f".repeat(64) } }],
+    ["another environment than the one requested", { ...exp, environment: "staging" }, {}],
+    ["a revision observed in another environment", exp, { causal_revision: { repository: "acme/app", deployment_id: "987", head_sha: HEAD, environment: "staging", bound_at_mutation: true } }],
+    ["a revision with no environment", exp, { causal_revision: { repository: "acme/app", deployment_id: "987", head_sha: HEAD, bound_at_mutation: true } }],
+    ["a revision with no head SHA (the plan's head is never substituted)", exp, { causal_revision: { repository: "acme/app", deployment_id: "987", environment: "production", bound_at_mutation: true } }],
+    ["status and revision naming different deployments", exp, { causal_revision: { repository: "acme/app", deployment_id: "111", head_sha: HEAD, environment: "production", bound_at_mutation: true } }],
   ])("mismatch: %s", (_n, e, ev) => {
     expect(buildDeployReadback(established({}, ev), e).verdict).toBe("mismatch");
+  });
+
+  it("mismatch: the runtime response names another operation, or none", () => {
+    expect(buildDeployReadback(established({ operation_id: "op-other" }), exp).verdict).toBe("mismatch");
+    expect(buildDeployReadback(established({ operation_id: undefined }), exp).verdict).toBe("mismatch");
+  });
+
+  it("the requested operation and attempt are reported as requested, never as runtime fields", () => {
+    const r = buildDeployReadback(established({ operation_id: "op-other" }), exp);
+    expect(r).toMatchObject({ operation_id: "op-other", requested_operation_id: "op-1", requested_attempt_id: "att-1" });
+  });
+
+  it.each([
+    ["no artifact-currentness record", { artifact_currentness: undefined }],
+    ["no observed revision", { causal_revision: undefined }],
+  ])("incomplete: established, but %s", (_n, ev) => {
+    expect(buildDeployReadback(established({}, ev), exp).verdict).toBe("incomplete");
   });
 
   it("mismatch: the runtime classified the observation as not the admitted effect", () => {

@@ -175,16 +175,20 @@ GitHub's own records (`github_causal_continuity.v1`):
 - the deployment id, status id and state;
 - head and base SHA, and the environment;
 - the evaluation, decision and permit hash, the change brief, and the
-  operation and attempt.
+  operation the runtime names.
+
+The operation and attempt this workflow asked about are reported separately
+as `requested_operation_id` and `requested_attempt_id`: they are inputs, not
+evidence.
 
 `readback-verdict` is deterministic:
 
 | Verdict | When |
 |---|---|
-| `verified` | The runtime established the effect, and its evidence names this run, a `success` deployment status, the expected head/base and the expected evaluation and permit |
+| `verified` | The runtime established the effect, and its evidence includes the observed revision and an artifact-currentness record that matches the plan. That evidence names this run, a `success` deployment status, the requested environment and operation, the expected head/base, and the expected evaluation and permit |
 | `mismatch` | The runtime classified the observation as not the authorized effect, or its evidence disagrees with any of those |
 | `failed` | The deploy job failed or was cancelled, and the runtime recorded that |
-| `incomplete` | Anything else: no response, an unknown result, or established without evidence to correlate |
+| `incomplete` | Anything else: no response, an unknown result, or established without the causal-continuity, revision or currentness evidence to correlate |
 
 The workflow's own claims are used only to cross-check. They can make a verdict
 `mismatch` or `incomplete`, never `verified`. The step fails unless the verdict
