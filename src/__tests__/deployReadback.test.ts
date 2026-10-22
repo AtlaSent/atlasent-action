@@ -102,6 +102,19 @@ describe("buildDeployReadback", () => {
     expect(buildDeployReadback(established({ operation_id: undefined }), exp).verdict).toBe("mismatch");
   });
 
+  it("attempt_id: compared when the runtime echoes it, reported as unchecked when it does not", () => {
+    const withAttempt = (id: string) => {
+      const r = established();
+      (r.response!["effect_establishment"] as Record<string, unknown>).attempt_id = id;
+      return r;
+    };
+    expect(buildDeployReadback(withAttempt("att-1"), exp)).toMatchObject({ verdict: "verified", attempt_id: "att-1" });
+    expect(buildDeployReadback(withAttempt("att-2"), exp).verdict).toBe("mismatch");
+    const absent = buildDeployReadback(established(), exp);
+    expect(absent).toMatchObject({ verdict: "verified", attempt_id: null });
+    expect(absent.reason).toMatch(/attempt_id \(runtime did not echo it/);
+  });
+
   it("the requested operation and attempt are reported as requested, never as runtime fields", () => {
     const r = buildDeployReadback(established({ operation_id: "op-other" }), exp);
     expect(r).toMatchObject({ operation_id: "op-other", requested_operation_id: "op-1", requested_attempt_id: "att-1" });

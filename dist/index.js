@@ -2335,6 +2335,7 @@ function buildDeployReadback(result, exp) {
     runtime_state: result?.state ?? "none",
     runtime_verdict: runtimeVerdict,
     operation_id: str(response?.["operation_id"]),
+    attempt_id: str(ee?.["attempt_id"]),
     requested_operation_id: exp.operationId,
     requested_attempt_id: exp.attemptId,
     workflow_run_id: str(evidence?.["workflow_run_id"]),
@@ -2395,6 +2396,9 @@ function buildDeployReadback(result, exp) {
   }
   check("deployment_id (located for the deploy job)", record.deployment_id, result.deploymentId ?? void 0);
   check("operation_id", record.operation_id, exp.operationId);
+  if (record.attempt_id !== null && record.attempt_id !== exp.attemptId) {
+    disagreements.push(`attempt_id ${record.attempt_id} != requested ${exp.attemptId}`);
+  }
   check("environment", record.environment, exp.environment);
   check("workflow_run_id", record.workflow_run_id, exp.runId);
   check("head_sha", record.head_sha, exp.headSha);
@@ -2405,7 +2409,8 @@ function buildDeployReadback(result, exp) {
     return done("mismatch", disagreements.join("; "));
   const unchecked = [
     exp.evaluationId ? null : "evaluation_id",
-    exp.permitHash ? null : "permit_token_hash"
+    exp.permitHash ? null : "permit_token_hash",
+    record.attempt_id !== null ? null : "attempt_id (runtime did not echo it; checked server-side only)"
   ].filter(Boolean);
   return done(
     "verified",
@@ -2429,7 +2434,7 @@ function deployReadbackSummary(r) {
     row("environment", r.environment),
     row("evaluation", r.evaluation_id),
     row("permit hash", r.permit_token_hash),
-    row("operation (runtime)", r.operation_id),
+    row("operation / attempt (runtime)", `${r.operation_id ?? "\u2014"} / ${r.attempt_id ?? "not echoed"}`),
     row("requested operation / attempt", `${r.requested_operation_id} / ${r.requested_attempt_id}`),
     ""
   ].join("\n");

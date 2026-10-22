@@ -47,6 +47,12 @@ export interface DeployReadback {
   runtime_verdict: string | null;
   /** The operation the runtime's response names. */
   operation_id: string | null;
+  /**
+   * The attempt the runtime matched (effect_establishment.attempt_id). Null when the
+   * runtime revision does not send it yet; the runtime still refuses any attempt that is
+   * not the operation's latest (attempt_not_latest), so a 200 implies that check passed.
+   */
+  attempt_id: string | null;
   /** What this workflow asked the runtime to establish. Caller-supplied: never provenance. */
   requested_operation_id: string;
   requested_attempt_id: string;
@@ -91,6 +97,7 @@ export function buildDeployReadback(result: EstablishResult | null, exp: Readbac
     runtime_state: result?.state ?? "none",
     runtime_verdict: runtimeVerdict,
     operation_id: str(response?.["operation_id"]),
+    attempt_id: str(ee?.["attempt_id"]),
     requested_operation_id: exp.operationId,
     requested_attempt_id: exp.attemptId,
     workflow_run_id: str(evidence?.["workflow_run_id"]),
@@ -153,6 +160,10 @@ export function buildDeployReadback(result: EstablishResult | null, exp: Readbac
   // The deployment this action located for the deploy job must be the one the runtime observed.
   check("deployment_id (located for the deploy job)", record.deployment_id, result.deploymentId ?? undefined);
   check("operation_id", record.operation_id, exp.operationId);
+  // Compared when the runtime echoes it. Absence is tolerated for now (see attempt_id).
+  if (record.attempt_id !== null && record.attempt_id !== exp.attemptId) {
+    disagreements.push(`attempt_id ${record.attempt_id} != requested ${exp.attemptId}`);
+  }
   check("environment", record.environment, exp.environment);
   check("workflow_run_id", record.workflow_run_id, exp.runId);
   check("head_sha", record.head_sha, exp.headSha);
@@ -164,6 +175,7 @@ export function buildDeployReadback(result: EstablishResult | null, exp: Readbac
   const unchecked = [
     exp.evaluationId ? null : "evaluation_id",
     exp.permitHash ? null : "permit_token_hash",
+    record.attempt_id !== null ? null : "attempt_id (runtime did not echo it; checked server-side only)",
   ].filter(Boolean);
   return done(
     "verified",
@@ -188,7 +200,7 @@ export function deployReadbackSummary(r: DeployReadback): string {
     row("environment", r.environment),
     row("evaluation", r.evaluation_id),
     row("permit hash", r.permit_token_hash),
-    row("operation (runtime)", r.operation_id),
+    row("operation / attempt (runtime)", `${r.operation_id ?? "—"} / ${r.attempt_id ?? "not echoed"}`),
     row("requested operation / attempt", `${r.requested_operation_id} / ${r.requested_attempt_id}`),
     "",
   ].join("\n");

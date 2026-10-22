@@ -179,7 +179,9 @@ GitHub's own records (`github_causal_continuity.v1`):
 
 The operation and attempt this workflow asked about are reported separately
 as `requested_operation_id` and `requested_attempt_id`: they are inputs, not
-evidence.
+evidence. When the runtime echoes `effect_establishment.attempt_id`, the readback
+reports it as `attempt_id` and requires it to equal the requested attempt. Until
+then the reason says the attempt was checked server-side only.
 
 `readback-verdict` is deterministic:
 
