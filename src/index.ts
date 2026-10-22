@@ -69,6 +69,7 @@ import { normalizeExecutionPayloadHash } from "./executionPayloadHash";
 import { runVqpVerify } from "./vqpVerify";
 import { resolveApprovals, type ApprovalEvidence } from "./approvals";
 import { buildGateStepSummary, type GateOutcome } from "./stepSummary";
+import { buildDeployReadback, deployReadbackSummary } from "./deployReadback";
 import {
   buildManagementDecisionBrief,
   ChangeBriefError,
@@ -1065,6 +1066,23 @@ async function runEstablishEffectStep(apiKey: string, apiUrl: string): Promise<v
     return;
   }
   const gh = getGitHubContext();
+  const expectations = {
+    runId: gh.run_id,
+    headSha,
+    baseSha,
+    operationId,
+    attemptId,
+    deployJobResult,
+    evaluationId: getInput("expected-evaluation-id") || undefined,
+    permitHash: getInput("expected-permit-hash") || undefined,
+  };
+  const publishReadback = (r: Parameters<typeof buildDeployReadback>[0]) => {
+    const readback = buildDeployReadback(r, expectations);
+    setOutput("readback-verdict", readback.verdict);
+    setOutput("deploy-readback", JSON.stringify(readback));
+    appendToStepSummary(deployReadbackSummary(readback));
+    return readback;
+  };
   try {
     const r = await establishDeployEffect({
       apiUrl,
@@ -1084,6 +1102,14 @@ async function runEstablishEffectStep(apiKey: string, apiUrl: string): Promise<v
     setOutput("effect-state", r.state);
     setOutput("effect-established", r.established ? "true" : "false");
     setOutput("deployment-id", r.deploymentId ?? "");
+    const readback = publishReadback(r);
+    if (r.established && readback.verdict !== "verified") {
+      setFailed(
+        `AtlaSent effect establishment: the runtime established an effect, but its readback is ${readback.verdict} ` +
+          `(${readback.reason}). Do not report this change as verified.`,
+      );
+      return;
+    }
     if (!r.established) {
       setFailed(
         `AtlaSent effect establishment: the deploy effect was NOT established (state=${r.state}` +
@@ -1094,6 +1120,7 @@ async function runEstablishEffectStep(apiKey: string, apiUrl: string): Promise<v
     info(`Deploy effect established by the runtime from GitHub's own records (deployment ${r.deploymentId}).`);
   } catch (error) {
     setOutput("effect-state", "unknown");
+    publishReadback(null);
     setFailed(
       `AtlaSent effect establishment could not run: ${error instanceof Error ? error.message : String(error)}. ` +
         "The operation stays open; nothing was recorded as succeeded.",

@@ -466,6 +466,12 @@ inputs:
   plan-ref:
     description: 'establish-effect only. The ref of the authorized change plan: the change-brief step''s change-brief-plan-ref output. The runtime recomputes the plan digest from base/head/ref, so it must match what the brief digested.'
     required: false
+  expected-evaluation-id:
+    description: 'establish-effect only, optional. The gate step''s evaluation-id output. Cross-checked against the evaluation the runtime''s sealed observation names; a disagreement makes readback-verdict "mismatch". It can never make the verdict "verified" on its own.'
+    required: false
+  expected-permit-hash:
+    description: 'establish-effect only, optional. The admit-operation step''s permit-hash output, cross-checked the same way.'
+    required: false
 outputs:
   solo-attestation-id:
     description: 'UUID of the recorded solo_operator_attestations row. Set only by solo-operator-attest mode. Empty on failure (fail-closed — no partial attestation is ever recorded).'
@@ -634,6 +640,10 @@ outputs:
     description: 'establish-effect only. "true" only when the runtime established the deploy effect from GitHub records.'
   deployment-id:
     description: 'establish-effect only. The GitHub deployment id this run''s deploy job created.'
+  readback-verdict:
+    description: 'establish-effect only. verified | mismatch | failed | incomplete, derived from the runtime''s sealed GitHub observation (never from the workflow''s claim). "verified" requires the runtime to have established the effect AND its evidence to name this run, a successful native deployment status, the expected head/base and every expected authorization id given.'
+  deploy-readback:
+    description: 'establish-effect only. JSON atlasent.deploy_readback.v1: the runtime-read run id, deployment id and status, head/base SHA and environment, correlated with the evaluation, decision, permit hash, change brief, operation and attempt, plus the verdict and its reason.'
 runs:
   using: 'node24'
   main: 'dist/index.js'

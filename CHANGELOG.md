@@ -4,6 +4,26 @@ All notable changes to `atlasent-action` are documented here.
 
 ## [Unreleased]
 
+### Added: deploy readback on `establish-effect`
+
+`establish-effect` now also outputs `deploy-readback`
+(`atlasent.deploy_readback.v1`) and `readback-verdict`
+(`verified | mismatch | failed | incomplete`), and writes them to the job
+summary. Both are built from the runtime's sealed GitHub observation, so the
+record correlates the deploy GitHub actually ran with the authorization that
+admitted it:
+- run id, deployment id and status, head/base SHA and environment;
+- the evaluation, decision and permit hash, the change brief, and the
+  operation and attempt.
+
+The new optional inputs `expected-evaluation-id` and `expected-permit-hash`
+are cross-checked against that observation. They can turn the verdict into
+`mismatch`, never into `verified`.
+
+**Behaviour change:** the step now also fails when the runtime reports the
+effect established but its evidence disagrees with this run or plan, or lacks
+the causal-continuity record.
+
 ### Added: Azure DevOps task closes Azure Consequential Operations
 
 The unpublished `AtlaSentGate` Azure Pipelines task (task version 1.3.0) has
