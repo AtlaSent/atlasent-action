@@ -2313,6 +2313,133 @@ function buildGateStepSummary(input) {
   return lines.join("\n");
 }
 
+// src/deployReadback.ts
+var obj = (v) => v !== null && typeof v === "object" && !Array.isArray(v) ? v : null;
+var str = (v) => typeof v === "string" && v.length > 0 ? v : typeof v === "number" && Number.isSafeInteger(v) ? String(v) : null;
+function buildDeployReadback(result, exp) {
+  const response = obj(result?.response);
+  const ee = obj(response?.["effect_establishment"]);
+  const observation = obj(ee?.["observation"]);
+  const evidence = obj(observation?.["evidence"]);
+  const auth = obj(evidence?.["authorization"]);
+  const plan = obj(evidence?.["verified_plan"]);
+  const mutation = obj(evidence?.["native_mutation"]);
+  const revision = obj(evidence?.["causal_revision"]);
+  const currentness = obj(evidence?.["artifact_currentness"]);
+  const runtimeVerdict = str(ee?.["verdict"]);
+  const record = {
+    schema: "atlasent.deploy_readback.v1",
+    verdict: "incomplete",
+    reason: "",
+    source: response ? "runtime_establish_effect" : "none",
+    runtime_state: result?.state ?? "none",
+    runtime_verdict: runtimeVerdict,
+    operation_id: str(response?.["operation_id"]),
+    attempt_id: str(ee?.["attempt_id"]),
+    requested_operation_id: exp.operationId,
+    requested_attempt_id: exp.attemptId,
+    workflow_run_id: str(evidence?.["workflow_run_id"]),
+    // The native status's deployment only: never the revision's or the one this action located.
+    deployment_id: str(mutation?.["deployment_id"]),
+    deployment_status_id: str(mutation?.["status_id"]),
+    deployment_state: str(mutation?.["state"]),
+    deployment_occurred_at: str(mutation?.["occurred_at"]),
+    // Observed at the mutation, never the authorized plan's own value.
+    head_sha: str(revision?.["head_sha"]),
+    base_sha: str(plan?.["base_sha"]),
+    environment: str(revision?.["environment"]),
+    evaluation_id: str(auth?.["evaluation_id"]),
+    decision_id: str(auth?.["decision_id"]),
+    permit_token_hash: str(auth?.["permit_token_hash"]),
+    change_brief_id: str(auth?.["change_brief_id"]),
+    canonical_plan_digest: str(plan?.["canonical_plan_digest"]) ?? str(auth?.["canonical_plan_digest"])
+  };
+  const done = (verdict, reason) => ({ ...record, verdict, reason });
+  if (!result || !response)
+    return done("incomplete", "no runtime response");
+  if (exp.deployJobResult !== "success") {
+    if (result.state === "failed" || result.state === "unknown") {
+      return done("failed", `deploy job ${exp.deployJobResult}; runtime recorded ${result.state}`);
+    }
+    return done("incomplete", `deploy job ${exp.deployJobResult}; runtime state ${result.state} is not terminal`);
+  }
+  if (runtimeVerdict === "mismatch") {
+    return done("mismatch", `runtime: ${str(ee?.["reason"]) ?? str(observation?.["reason"]) ?? "observation is not the admitted effect"}`);
+  }
+  if (!result.established || runtimeVerdict !== "established") {
+    return done("incomplete", `runtime did not establish the effect (state=${result.state}${result.reason ? `, reason=${result.reason}` : ""})`);
+  }
+  if (!evidence || !auth || !mutation || str(evidence["version"]) !== "github_causal_continuity.v1") {
+    return done("incomplete", "the runtime established the effect but returned no causal-continuity evidence to correlate");
+  }
+  const disagreements = [];
+  const check = (name, actual, expected) => {
+    if (expected === void 0 || expected === "")
+      return;
+    if (actual === null)
+      disagreements.push(`${name} absent from evidence`);
+    else if (actual.toLowerCase() !== expected.toLowerCase())
+      disagreements.push(`${name} ${actual} != expected ${expected}`);
+  };
+  if (!revision || !currentness) {
+    return done("incomplete", "the runtime returned no observed revision or artifact-currentness record, so the deployed artifact cannot be tied to the plan");
+  }
+  if (record.deployment_state !== "success")
+    disagreements.push(`native deployment state ${record.deployment_state ?? "absent"}`);
+  if (currentness["matches_verified_plan"] !== true)
+    disagreements.push("artifact does not match the verified plan");
+  const revisionDeployment = str(revision["deployment_id"]);
+  if (record.deployment_id === null || revisionDeployment === null) {
+    disagreements.push("the native status or the observed revision names no deployment");
+  } else if (record.deployment_id !== revisionDeployment) {
+    disagreements.push(`status deployment ${record.deployment_id} != revision deployment ${revisionDeployment}`);
+  }
+  check("deployment_id (located for the deploy job)", record.deployment_id, result.deploymentId ?? void 0);
+  check("operation_id", record.operation_id, exp.operationId);
+  if (record.attempt_id !== null && record.attempt_id !== exp.attemptId) {
+    disagreements.push(`attempt_id ${record.attempt_id} != requested ${exp.attemptId}`);
+  }
+  check("environment", record.environment, exp.environment);
+  check("workflow_run_id", record.workflow_run_id, exp.runId);
+  check("head_sha", record.head_sha, exp.headSha);
+  check("base_sha", record.base_sha, exp.baseSha);
+  check("evaluation_id", record.evaluation_id, exp.evaluationId);
+  check("permit_token_hash", record.permit_token_hash, exp.permitHash);
+  if (disagreements.length)
+    return done("mismatch", disagreements.join("; "));
+  const unchecked = [
+    exp.evaluationId ? null : "evaluation_id",
+    exp.permitHash ? null : "permit_token_hash",
+    record.attempt_id !== null ? null : "attempt_id (runtime did not echo it; checked server-side only)"
+  ].filter(Boolean);
+  return done(
+    "verified",
+    `runtime established the effect from GitHub records${unchecked.length ? `; not cross-checked against this workflow: ${unchecked.join(", ")}` : ""}`
+  );
+}
+function deployReadbackSummary(r) {
+  const row = (k, v) => `| ${k} | ${v === null || v === "" ? "\u2014" : `\`${v}\``} |`;
+  return [
+    `### AtlaSent deploy readback: **${r.verdict}**`,
+    "",
+    r.reason,
+    "",
+    "| Field | Value |",
+    "|---|---|",
+    row("source", r.source),
+    row("runtime state / verdict", `${r.runtime_state} / ${r.runtime_verdict ?? "none"}`),
+    row("workflow run", r.workflow_run_id),
+    row("deployment / status", r.deployment_id ? `${r.deployment_id} / ${r.deployment_status_id ?? "?"} (${r.deployment_state ?? "?"})` : null),
+    row("head / base", r.head_sha || r.base_sha ? `${r.head_sha ?? "?"} / ${r.base_sha ?? "?"}` : null),
+    row("environment", r.environment),
+    row("evaluation", r.evaluation_id),
+    row("permit hash", r.permit_token_hash),
+    row("operation / attempt (runtime)", `${r.operation_id ?? "\u2014"} / ${r.attempt_id ?? "not echoed"}`),
+    row("requested operation / attempt", `${r.requested_operation_id} / ${r.requested_attempt_id}`),
+    ""
+  ].join("\n");
+}
+
 // src/changeBrief.ts
 var fs3 = __toESM(require("fs"));
 var import_enforce10 = __toESM(require_dist());
@@ -2322,9 +2449,9 @@ function canonicalize(value) {
     return JSON.stringify(value);
   if (Array.isArray(value))
     return `[${value.map(canonicalize).join(",")}]`;
-  const obj = value;
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalize(obj[k])}`).join(",")}}`;
+  const obj2 = value;
+  const keys = Object.keys(obj2).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalize(obj2[k])}`).join(",")}}`;
 }
 async function computeGithubPlanDigest(input) {
   const projection = {
@@ -4579,6 +4706,24 @@ async function runEstablishEffectStep(apiKey, apiUrl) {
     return;
   }
   const gh = getGitHubContext();
+  const expectations = {
+    runId: gh.run_id,
+    headSha,
+    baseSha,
+    operationId,
+    attemptId,
+    deployJobResult,
+    environment: githubEnvironment,
+    evaluationId: getInput("expected-evaluation-id") || void 0,
+    permitHash: getInput("expected-permit-hash") || void 0
+  };
+  const publishReadback = (r) => {
+    const readback = buildDeployReadback(r, expectations);
+    setOutput("readback-verdict", readback.verdict);
+    setOutput("deploy-readback", JSON.stringify(readback));
+    appendToStepSummary(deployReadbackSummary(readback));
+    return readback;
+  };
   try {
     const r = await establishDeployEffect({
       apiUrl,
@@ -4598,6 +4743,13 @@ async function runEstablishEffectStep(apiKey, apiUrl) {
     setOutput("effect-state", r.state);
     setOutput("effect-established", r.established ? "true" : "false");
     setOutput("deployment-id", r.deploymentId ?? "");
+    const readback = publishReadback(r);
+    if (r.established && readback.verdict !== "verified") {
+      setFailed(
+        `AtlaSent effect establishment: the runtime established an effect, but its readback is ${readback.verdict} (${readback.reason}). Do not report this change as verified.`
+      );
+      return;
+    }
     if (!r.established) {
       setFailed(
         `AtlaSent effect establishment: the deploy effect was NOT established (state=${r.state}${r.reason ? `, reason=${r.reason}` : ""}). Do not report this change as verified.`
@@ -4607,6 +4759,7 @@ async function runEstablishEffectStep(apiKey, apiUrl) {
     info(`Deploy effect established by the runtime from GitHub's own records (deployment ${r.deploymentId}).`);
   } catch (error) {
     setOutput("effect-state", "unknown");
+    publishReadback(null);
     setFailed(
       `AtlaSent effect establishment could not run: ${error instanceof Error ? error.message : String(error)}. The operation stays open; nothing was recorded as succeeded.`
     );

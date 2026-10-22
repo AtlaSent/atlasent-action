@@ -64,6 +64,8 @@ jobs:
       admitted: ${{ steps.admit.outputs.admitted }}
       operation-id: ${{ steps.admit.outputs.operation-id }}
       attempt-id: ${{ steps.admit.outputs.attempt-id }}
+      permit-hash: ${{ steps.admit.outputs.permit-hash }}
+      evaluation-id: ${{ steps.evaluate.outputs.evaluation-id }}
       base-sha: ${{ steps.brief.outputs.change-brief-plan-base-sha }}
       head-sha: ${{ steps.brief.outputs.change-brief-plan-head-sha }}
       plan-ref: ${{ steps.brief.outputs.change-brief-plan-ref }}
@@ -156,7 +158,43 @@ jobs:
           base-sha: ${{ needs.gate.outputs.base-sha }}
           head-sha: ${{ needs.gate.outputs.head-sha }}
           plan-ref: ${{ needs.gate.outputs.plan-ref }}
+          # Cross-checked against the evaluation and permit the runtime's
+          # sealed observation names. A disagreement is a mismatch.
+          expected-evaluation-id: ${{ needs.gate.outputs.evaluation-id }}
+          expected-permit-hash: ${{ needs.gate.outputs.permit-hash }}
 ```
+
+### The deploy readback
+
+The establish step writes one record, `deploy-readback`
+(`atlasent.deploy_readback.v1`), to its outputs and to the job summary. Every
+field comes from the runtime's sealed observation, which the runtime built from
+GitHub's own records (`github_causal_continuity.v1`):
+
+- the workflow run id;
+- the deployment id, status id and state;
+- head and base SHA, and the environment;
+- the evaluation, decision and permit hash, the change brief, and the
+  operation the runtime names.
+
+The operation and attempt this workflow asked about are reported separately
+as `requested_operation_id` and `requested_attempt_id`: they are inputs, not
+evidence. When the runtime echoes `effect_establishment.attempt_id`, the readback
+reports it as `attempt_id` and requires it to equal the requested attempt. Until
+then the reason says the attempt was checked server-side only.
+
+`readback-verdict` is deterministic:
+
+| Verdict | When |
+|---|---|
+| `verified` | The runtime established the effect, and its evidence includes the observed revision and an artifact-currentness record that matches the plan. That evidence names this run, a `success` deployment status, the requested environment and operation, the expected head/base, and the expected evaluation and permit |
+| `mismatch` | The runtime classified the observation as not the authorized effect, or its evidence disagrees with any of those |
+| `failed` | The deploy job failed or was cancelled, and the runtime recorded that |
+| `incomplete` | Anything else: no response, an unknown result, or established without the causal-continuity, revision or currentness evidence to correlate |
+
+The workflow's own claims are used only to cross-check. They can make a verdict
+`mismatch` or `incomplete`, never `verified`. The step fails unless the verdict
+is `verified`.
 
 ## What each refusal looks like
 
