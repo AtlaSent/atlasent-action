@@ -94,7 +94,8 @@ export function buildDeployReadback(result: EstablishResult | null, exp: Readbac
     requested_operation_id: exp.operationId,
     requested_attempt_id: exp.attemptId,
     workflow_run_id: str(evidence?.["workflow_run_id"]),
-    deployment_id: str(mutation?.["deployment_id"]) ?? str(revision?.["deployment_id"]) ?? result?.deploymentId ?? null,
+    // The native status's deployment only: never the revision's or the one this action located.
+    deployment_id: str(mutation?.["deployment_id"]),
     deployment_status_id: str(mutation?.["status_id"]),
     deployment_state: str(mutation?.["state"]),
     deployment_occurred_at: str(mutation?.["occurred_at"]),
@@ -142,7 +143,15 @@ export function buildDeployReadback(result: EstablishResult | null, exp: Readbac
   }
   if (record.deployment_state !== "success") disagreements.push(`native deployment state ${record.deployment_state ?? "absent"}`);
   if (currentness["matches_verified_plan"] !== true) disagreements.push("artifact does not match the verified plan");
-  check("deployment_id (status vs revision)", str(revision["deployment_id"]), str(mutation["deployment_id"]) ?? undefined);
+  // Both runtime-side ids are required: a comparison with an absent side would be skipped.
+  const revisionDeployment = str(revision["deployment_id"]);
+  if (record.deployment_id === null || revisionDeployment === null) {
+    disagreements.push("the native status or the observed revision names no deployment");
+  } else if (record.deployment_id !== revisionDeployment) {
+    disagreements.push(`status deployment ${record.deployment_id} != revision deployment ${revisionDeployment}`);
+  }
+  // The deployment this action located for the deploy job must be the one the runtime observed.
+  check("deployment_id (located for the deploy job)", record.deployment_id, result.deploymentId ?? undefined);
   check("operation_id", record.operation_id, exp.operationId);
   check("environment", record.environment, exp.environment);
   check("workflow_run_id", record.workflow_run_id, exp.runId);

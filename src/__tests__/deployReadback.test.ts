@@ -78,9 +78,23 @@ describe("buildDeployReadback", () => {
     ["a revision observed in another environment", exp, { causal_revision: { repository: "acme/app", deployment_id: "987", head_sha: HEAD, environment: "staging", bound_at_mutation: true } }],
     ["a revision with no environment", exp, { causal_revision: { repository: "acme/app", deployment_id: "987", head_sha: HEAD, bound_at_mutation: true } }],
     ["a revision with no head SHA (the plan's head is never substituted)", exp, { causal_revision: { repository: "acme/app", deployment_id: "987", environment: "production", bound_at_mutation: true } }],
+    ["a native status with no deployment id", exp, { native_mutation: { status_id: "555", state: "success" } }],
+    ["a revision with no deployment id", exp, { causal_revision: { repository: "acme/app", head_sha: HEAD, environment: "production", bound_at_mutation: true } }],
     ["status and revision naming different deployments", exp, { causal_revision: { repository: "acme/app", deployment_id: "111", head_sha: HEAD, environment: "production", bound_at_mutation: true } }],
   ])("mismatch: %s", (_n, e, ev) => {
     expect(buildDeployReadback(established({}, ev), e).verdict).toBe("mismatch");
+  });
+
+  it("mismatch: neither the status nor the revision names a deployment (null never equals null)", () => {
+    const r = established({}, {
+      native_mutation: { status_id: "555", state: "success" },
+      causal_revision: { repository: "acme/app", head_sha: HEAD, environment: "production", bound_at_mutation: true },
+    });
+    expect(buildDeployReadback({ ...r, deploymentId: null }, exp).verdict).toBe("mismatch");
+  });
+
+  it("mismatch: the runtime observed another deployment than the one located for the deploy job", () => {
+    expect(buildDeployReadback({ ...established(), deploymentId: "111" }, exp).verdict).toBe("mismatch");
   });
 
   it("mismatch: the runtime response names another operation, or none", () => {
