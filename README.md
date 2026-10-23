@@ -242,9 +242,12 @@ Provide `GITHUB_TOKEN` when the policy depends on review evidence:
     environment: live
 ```
 
-Do not put a change window or an approval count in `context`. The runtime
-enforces change windows itself, and a value the workflow types in is never
-authorization evidence.
+Do not put a change window in `context`; the runtime enforces change windows
+itself. An approval count you type into `context` is your own unverified claim.
+In the default `pr-reviews` mode it is replaced by the reviews GitHub reports.
+With `approvals-from: none` it is passed through unverified, so do not rely on
+it where a policy needs real review: use an AtlaSent approval or a signed
+approval artifact (below).
 
 If review lookup fails, the derived approval count falls to zero. For an
 approval-gated policy that is the fail-closed direction: the workflow does not

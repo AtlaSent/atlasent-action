@@ -67,7 +67,7 @@ inputs:
     required: false
     default: 'true'
   context:
-    description: 'JSON context to include in the evaluation (optional). Used for single-eval path. Values here override anything the action derives automatically (e.g. an explicit `approvals` count wins over PR-review-derived approvals).'
+    description: 'JSON context to include in the evaluation (optional). Used for single-eval path. Descriptive facts only: values the action derives or verifies (repository, ref, sha, workflow/run metadata, and PR-review approvals when approvals-from is pr-reviews) are applied after it and always win. Never put authorization evidence here (a change window, an approval count): a value the workflow types in is the caller''s own unverified claim.'
     required: false
     default: '{}'
   approvals-from:
@@ -78,7 +78,10 @@ inputs:
           context.approvals + context.approving_reviewers. Lets the
           `allow-2-approvals-change-window` policy template work out of the box.
           Requires GITHUB_TOKEN (set `env: GITHUB_TOKEN` to your token secret).
-        - "none": do not derive approvals; supply them via the `context` input.
+        - "none": do not derive approvals. A `context.approvals` you supply
+          is then passed through as the caller's own UNVERIFIED claim; do not
+          rely on it for a policy that needs real review. Use an AtlaSent
+          approval (wait-for-approval) or a signed approval artifact instead.
       Best-effort and fail-open-to-zero: any API failure yields 0 approvals,
       which denies a count-gated deploy (the fail-closed direction).
     required: false
