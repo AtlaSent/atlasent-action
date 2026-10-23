@@ -2593,13 +2593,13 @@ export async function run(): Promise<void> {
       triggering_actor: triggeringActorId,
       pr_number: approvalEvidence?.pr_number ?? gh.pr_number ?? null,
       run_url: `${gh.server_url}/${gh.repository}/actions/runs/${gh.run_id}`,
-      // Verified approval evidence from PR reviews. Only present (and only
-      // overrides) when approvals-from: pr-reviews actually consulted the
-      // API; in approvals-from: none mode, an operator-supplied `approvals`
-      // in `context` is intentionally honored (the operator has opted out
-      // of automatic verification and is expected to source evidence some
-      // other way, e.g. a separate approval-artifact integration).
-      ...(approvalEvidence && approvalEvidence.source === "pr-reviews"
+      // Approval evidence from PR reviews. Whenever approvals-from:
+      // pr-reviews was requested, this replaces any caller-entered count,
+      // INCLUDING when the lookup failed (no token, no PR, API error): a
+      // failed lookup is 0 approvals, never a fallback to the caller's own
+      // claim. Only approvals-from: none passes an operator-supplied
+      // `approvals` through, as an unverified claim the runtime weighs.
+      ...(approvalEvidence
         ? {
             approvals: approvalEvidence.approvals,
             approving_reviewers: approvalEvidence.approving_reviewers,

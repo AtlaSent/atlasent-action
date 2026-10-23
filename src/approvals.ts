@@ -200,8 +200,8 @@ export async function resolveApprovals(
   if (!token) {
     warn(
       "AtlaSent: GITHUB_TOKEN not available — cannot read PR reviews for approval " +
-        "evidence. Pass `env: GITHUB_TOKEN: ${{ github.token }}` or supply `approvals` " +
-        "via the `context` input. Treating as 0 approvals.",
+        "evidence. Pass `env: GITHUB_TOKEN: ${{ github.token }}`. Treating as 0 approvals; " +
+        "an `approvals` value in the `context` input is not used in place of review evidence.",
     );
     return { ...EMPTY };
   }

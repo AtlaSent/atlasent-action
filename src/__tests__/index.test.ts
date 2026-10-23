@@ -1727,6 +1727,25 @@ describe("GitHub-approval-artifact minting wiring", () => {
     expect(ctx["approving_reviewers"]).toEqual([]);
   });
 
+  it.each([
+    ["no GITHUB_TOKEN / no PR found", null],
+    ["review API error on a resolved PR", 42],
+  ])("pr-reviews: a failed lookup (%s) is zero approvals, never the forged context value", async (_label, pr) => {
+    setApiKey();
+    setInput("action", "production.deploy");
+    setGitHubContext();
+    setInput("context", JSON.stringify({ approvals: 99, approving_reviewers: ["release-manager"] }));
+    // The real failure shape from resolveApprovals(): source "none".
+    mockResolveApprovals.mockResolvedValueOnce({ approvals: 0, approving_reviewers: [], pr_number: pr, source: "none" });
+    mockEnforce.mockResolvedValueOnce(makeAllowResult());
+
+    await run();
+
+    const ctx = getConfig()["context"] as Record<string, unknown>;
+    expect(ctx["approvals"]).toBe(0);
+    expect(ctx["approving_reviewers"]).toEqual([]);
+  });
+
   it("none: a forged count and reviewer list are not verified, derived or minted into an approval artifact", async () => {
     setApiKey();
     setInput("action", "production.deploy");

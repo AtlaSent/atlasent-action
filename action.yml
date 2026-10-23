@@ -82,8 +82,9 @@ inputs:
           is then passed through as the caller's own UNVERIFIED claim; do not
           rely on it for a policy that needs real review. Use an AtlaSent
           approval (wait-for-approval) or a signed approval artifact instead.
-      Best-effort and fail-open-to-zero: any API failure yields 0 approvals,
-      which denies a count-gated deploy (the fail-closed direction).
+      Best-effort and fail-open-to-zero: in pr-reviews mode any failure (no
+      token, no PR, API error) yields 0 approvals and replaces any count in
+      `context`, which denies a count-gated deploy (the fail-closed direction).
     required: false
     default: 'pr-reviews'
   approval-artifact-mint:
