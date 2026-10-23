@@ -4267,7 +4267,11 @@ async function notifyTeams(webhookUrl, opts) {
     );
   }
 }
+function consoleBaseUrlInput() {
+  return (getInput("console-base-url") || "https://console.atlasent.io").replace(/\/$/, "");
+}
 function buildGateDenyComment(opts) {
+  const consoleBase = opts.consoleBaseUrl ?? consoleBaseUrlInput();
   const icon = opts.decision === "deny" ? "\u{1F534}" : opts.decision === "hold" ? "\u{1F7E1}" : opts.decision === "escalate" ? "\u{1F6A8}" : "\u274C";
   const label = decisionLabel(opts.decision);
   const lines = [
@@ -4288,7 +4292,7 @@ function buildGateDenyComment(opts) {
   if (opts.decision === "hold" || opts.decision === "escalate") {
     lines.push(
       "",
-      "> **Next step:** An authorized reviewer must approve this deployment in the [AtlaSent console](https://console.atlasent.io/approvals) or via the Slack Approval Bot."
+      `> **Next step:** An authorized reviewer must approve this deployment in the [AtlaSent console](${consoleBase}/approvals) or via the Slack Approval Bot.`
     );
   }
   return lines.join("\n");
@@ -4946,10 +4950,7 @@ async function runChangeBriefStep(apiKey, apiUrl) {
   const targetSystem = getInput("change-brief-target-system") || "github";
   const targetId = getInput("change-brief-target-id") || getInput("target-id") || gh.repository;
   const changeRequest = getInput("change-request") || void 0;
-  const consoleBaseUrl = (getInput("console-base-url") || "https://console.atlasent.io").replace(
-    /\/$/,
-    ""
-  );
+  const consoleBaseUrl = consoleBaseUrlInput();
   const rollbackPreviousSha = getInput("rollback-previous-sha") || void 0;
   const rollbackWorkflow = getInput("rollback-workflow") || void 0;
   const rollbackReference = getInput("rollback-reference") || void 0;
@@ -5892,6 +5893,7 @@ async function run() {
         const summaryReason = summaryOutcome === "deny" ? err.decision?.denyReason || err.decision?.denyCode ? (0, import_enforce15.denyReasonText)(err.decision) : err.message : summaryOutcome === "hold" ? err.decision?.holdReason ?? "awaiting approval" : summaryOutcome === "escalate" ? "manual review required" : err.message;
         appendToStepSummary(
           buildGateStepSummary({
+            consoleBaseUrl: consoleBaseUrlInput(),
             outcome: summaryOutcome,
             action: actionType,
             actor: actorId,
@@ -6122,6 +6124,7 @@ async function run() {
       emitFinancialGovernanceAdvisory(actionType, actorId, orgId);
       appendToStepSummary(
         buildGateStepSummary({
+          consoleBaseUrl: consoleBaseUrlInput(),
           outcome: "error",
           action: actionType,
           actor: actorId,
@@ -6251,6 +6254,7 @@ async function run() {
   }
   appendToStepSummary(
     buildGateStepSummary({
+      consoleBaseUrl: consoleBaseUrlInput(),
       outcome: "allow",
       action: actionType,
       actor: actorId,

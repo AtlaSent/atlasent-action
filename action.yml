@@ -323,7 +323,7 @@ inputs:
     required: false
     default: ''
   console-base-url:
-    description: 'Base URL of the AtlaSent console, used to build the change-brief-console-url output. Defaults to https://console.atlasent.io.'
+    description: 'Base URL of the AtlaSent console for links in the change-brief-console-url output, the job summary and the held/denied PR comment (approvals). Defaults to https://console.atlasent.io (production). Set https://staging.atlasent.io for a gate against the staging runtime, or approvers are sent to the production console.'
     required: false
     default: ''
   pr-comment-on-change-brief:
