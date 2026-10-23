@@ -548,7 +548,14 @@ export async function runGate(inputs: GateInputs, log: TaskLogger): Promise<Gate
     actor: inputs.actor,
     targetId: inputs.targetId,
     environment: inputs.environment,
-    context: inputs.context,
+    // approvalsFrom: pr-reviews cannot derive a count on Azure DevOps yet,
+    // which is the same as a failed lookup on the GitHub Action: 0 approvals,
+    // replacing any count the pipeline typed into context. A caller-entered
+    // count passes through (as an unverified claim) only in approvalsFrom: none.
+    context:
+      inputs.approvalsFrom === "pr-reviews"
+        ? { ...inputs.context, approvals: 0, approving_reviewers: [] }
+        : inputs.context,
     // Re-present every binding provided here at verify, or fail closed
     // (MISSING_BINDING) rather than silently drop it — same contract the
     // GitHub Action's single-eval path uses.
@@ -608,9 +615,9 @@ export async function runGate(inputs: GateInputs, log: TaskLogger): Promise<Gate
   if (inputs.approvalsFrom === "pr-reviews") {
     log.warning(
       "approvalsFrom: pr-reviews is not implemented for Azure DevOps Pipelines in this v1 task " +
-        "— no approval count is auto-derived from Azure Repos pull request reviews. Pass " +
-        "context.approvals explicitly (e.g. from an Azure Repos PR API call in an earlier step) " +
-        "if your policy requires one. Proceeding as approvalsFrom: none.",
+        "— no approval count is auto-derived from Azure Repos pull request reviews. Sending 0 " +
+        "approvals; any context.approvals is replaced, because a count the pipeline supplies is " +
+        "not review evidence. For a policy that needs real approval, use waitForApproval: true.",
     );
   }
 

@@ -204,9 +204,11 @@ before the single-evaluation path will forward it.
 
 ## GitHub-derived facts cannot be overridden
 
-The optional `context` input is useful for application-specific facts such as
-service name, change-window state, or deployment metadata. Caller-supplied
-context is applied first.
+The optional `context` input is for descriptive application facts, such as the
+service name or deployment metadata. It is not for authorization evidence: a
+change window, an approval count or anything else a policy treats as proof
+must come from the runtime or a verified source, never from a value the
+workflow types in. Caller-supplied context is applied first.
 
 Facts derived or verified from the GitHub runtime are then applied last and win
 on collision. These include repository, ref, SHA, workflow/run metadata, PR
@@ -238,8 +240,14 @@ Provide `GITHUB_TOKEN` when the policy depends on review evidence:
   with:
     action: production.deploy
     environment: live
-    context: '{"change_window": true}'
 ```
+
+Do not put a change window in `context`; the runtime enforces change windows
+itself. An approval count you type into `context` is your own unverified claim.
+In the default `pr-reviews` mode it is replaced by the reviews GitHub reports.
+With `approvals-from: none` it is passed through unverified, so do not rely on
+it where a policy needs real review: use an AtlaSent approval or a signed
+approval artifact (below).
 
 If review lookup fails, the derived approval count falls to zero. For an
 approval-gated policy that is the fail-closed direction: the workflow does not

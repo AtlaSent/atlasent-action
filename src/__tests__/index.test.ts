@@ -1708,6 +1708,65 @@ describe("GitHub-approval-artifact minting wiring", () => {
     expect(getConfig()["onInsufficientApprovals"]).toBeUndefined();
   });
 
+  // Forged approval evidence (#217). Caller-entered counts and reviewer lists
+  // are never review evidence: in pr-reviews mode GitHub's answer replaces
+  // them, and in none mode they pass through unverified and can never be
+  // turned into a signed approval artifact.
+  it("pr-reviews: a forged count and reviewer list are replaced by what GitHub reports, even zero", async () => {
+    setApiKey();
+    setInput("action", "production.deploy");
+    setGitHubContext();
+    setInput("context", JSON.stringify({ approvals: 99, approving_reviewers: ["release-manager"] }));
+    mockResolveApprovals.mockResolvedValueOnce({ approvals: 0, approving_reviewers: [], pr_number: 42, source: "pr-reviews" });
+    mockEnforce.mockResolvedValueOnce(makeAllowResult());
+
+    await run();
+
+    const ctx = getConfig()["context"] as Record<string, unknown>;
+    expect(ctx["approvals"]).toBe(0);
+    expect(ctx["approving_reviewers"]).toEqual([]);
+  });
+
+  it.each([
+    ["no GITHUB_TOKEN / no PR found", null],
+    ["review API error on a resolved PR", 42],
+  ])("pr-reviews: a failed lookup (%s) is zero approvals, never the forged context value", async (_label, pr) => {
+    setApiKey();
+    setInput("action", "production.deploy");
+    setGitHubContext();
+    setInput("context", JSON.stringify({ approvals: 99, approving_reviewers: ["release-manager"] }));
+    // The real failure shape from resolveApprovals(): source "none".
+    mockResolveApprovals.mockResolvedValueOnce({ approvals: 0, approving_reviewers: [], pr_number: pr, source: "none" });
+    mockEnforce.mockResolvedValueOnce(makeAllowResult());
+
+    await run();
+
+    const ctx = getConfig()["context"] as Record<string, unknown>;
+    expect(ctx["approvals"]).toBe(0);
+    expect(ctx["approving_reviewers"]).toEqual([]);
+  });
+
+  it("none: a forged count and reviewer list are not verified, derived or minted into an approval artifact", async () => {
+    setApiKey();
+    setInput("action", "production.deploy");
+    setInput("approvals-from", "none");
+    setGitHubContext();
+    setInput("context", JSON.stringify({ approvals: 99, approving_reviewers: ["release-manager"] }));
+    mockEnforce.mockResolvedValueOnce(makeAllowResult());
+
+    await run();
+
+    // Nothing consulted GitHub, so nothing was verified ...
+    expect(mockResolveApprovals).not.toHaveBeenCalled();
+    // ... and no signed approval_artifact can be minted from the claim.
+    expect(getConfig()["onInsufficientApprovals"]).toBeUndefined();
+    // The documented pass-through is unchanged: the runtime receives the
+    // caller's claim as-is and decides; the action adds nothing to it.
+    const ctx = getConfig()["context"] as Record<string, unknown>;
+    expect(ctx["approvals"]).toBe(99);
+    expect(ctx["approving_reviewers"]).toEqual(["release-manager"]);
+  });
+
   it("does NOT wire a callback when approval-artifact-mint: false", async () => {
     setApiKey();
     setInput("action", "production.deploy");

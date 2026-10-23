@@ -173,7 +173,7 @@
         "none": "none",
         "pr-reviews": "pr-reviews (not yet implemented for Azure DevOps)"
       },
-      "helpMarkDown": "Source for context.approvals. 'pr-reviews' is not yet implemented for Azure DevOps Pipelines in this v1 task (Azure Repos pull request reviews are not auto-derived) — it is accepted for forward compatibility with the GitHub Action's input surface but is treated as 'none' with a logged warning. Pass context.approvals explicitly if your policy requires an approval count."
+      "helpMarkDown": "Source for context.approvals. 'pr-reviews' is not yet implemented for Azure DevOps Pipelines in this v1 task (Azure Repos pull request reviews are not auto-derived) — it is accepted for forward compatibility with the GitHub Action's input surface; a warning is logged and 0 approvals are sent, replacing any context.approvals. A count supplied in context (with 'none') is the pipeline's own unverified claim, not review evidence; for a policy that needs real approval, use waitForApproval."
     },
     {
       "name": "waitForApproval",

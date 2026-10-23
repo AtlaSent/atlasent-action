@@ -28,8 +28,11 @@ jobs:
           actor: ${{ github.actor }}
           target-id: ${{ github.repository }}
           environment: production
+          # Approvals come from the merged PR's real reviews. No change window
+          # is asserted here: the runtime enforces it server-side, and a value
+          # typed into `context` is never evidence. Full chain:
+          # docs/github-gate.md.
           approvals-from: pr-reviews
-          context: '{"change_window":true}'
 
       - name: Deploy to production
         run: |

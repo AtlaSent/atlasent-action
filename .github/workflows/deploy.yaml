@@ -2,6 +2,12 @@ name: AtlaSent Deploy Gate (Demo)
 
 # Demo: gate deploys through AtlaSent before they execute.
 # In your repo, replace uses: ./ with: uses: Atlasent/atlasent-action@v1
+#
+# This sends no change window and no approval count of its own. Those are
+# authorization evidence: the runtime enforces the change window server-side,
+# and approvals come from real PR reviews or an AtlaSent approval, never from
+# a value typed into `context`. For the full governed chain (change brief,
+# approval, admit-operation, establish-effect) see docs/github-gate.md.
 
 on:
   workflow_dispatch:
@@ -37,7 +43,6 @@ jobs:
           actor: github-actions[bot]
           target-id: ${{ github.repository }}
           environment: ${{ inputs.environment || 'production' }}
-          context: '{"change_window":true,"approvals":2}'
 
       # Only reached if AtlaSent authorized the deploy (verified=true)
       - name: Deploy to ${{ inputs.environment || 'production' }}

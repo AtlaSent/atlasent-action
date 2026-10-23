@@ -435,6 +435,34 @@ describe("runGate — approvalsFrom: pr-reviews (not implemented for ADO in v1)"
 // mode: evaluate-only / verifyPermit: true — execution-boundary pattern
 // ---------------------------------------------------------------------------
 
+describe("runGate — forged approval evidence", () => {
+  it("pr-reviews: a forged context count and reviewer list are replaced by 0 / []", async () => {
+    mockEvaluate.mockResolvedValue(allowDecision());
+    mockVerifyPermit.mockResolvedValue({ verified: true, outcome: "verified" });
+    const inputs = parseInputs(baseEnv({ approvalsFromRaw: "pr-reviews" }));
+    inputs.context = { service: "api", approvals: 99, approving_reviewers: ["release-manager"] };
+
+    await runGate(inputs, { debug: () => {}, info: () => {}, warning: () => {}, error: () => {} });
+
+    const ctx = mockEvaluate.mock.calls.at(-1)![0].context as Record<string, unknown>;
+    expect(ctx["approvals"]).toBe(0);
+    expect(ctx["approving_reviewers"]).toEqual([]);
+    expect(ctx["service"]).toBe("api");
+  });
+
+  it("none: a supplied count passes through unchanged as the pipeline's own unverified claim", async () => {
+    mockEvaluate.mockResolvedValue(allowDecision());
+    mockVerifyPermit.mockResolvedValue({ verified: true, outcome: "verified" });
+    const inputs = parseInputs(baseEnv());
+    inputs.context = { approvals: 99 };
+
+    await runGate(inputs, { debug: () => {}, info: () => {}, warning: () => {}, error: () => {} });
+
+    const ctx = mockEvaluate.mock.calls.at(-1)![0].context as Record<string, unknown>;
+    expect(ctx["approvals"]).toBe(99);
+  });
+});
+
 describe("parseInputs — mode / verifyPermit", () => {
   it("defaults mode to 'enforce'", () => {
     expect(parseInputs(baseEnv()).mode).toBe("enforce");
