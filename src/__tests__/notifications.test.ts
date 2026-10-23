@@ -351,6 +351,13 @@ describe("buildGateDenyComment", () => {
     expect(comment).toContain("console.atlasent.io/approvals");
   });
 
+  it("links approvals to the configured console (staging gate), not production", async () => {
+    setInput("console-base-url", "https://staging.atlasent.io/");
+    const comment = await runDenyAndGetCommentBody({ decision: "escalate" });
+    expect(comment).toContain("(https://staging.atlasent.io/approvals)");
+    expect(comment).not.toContain("console.atlasent.io");
+  });
+
   it("does NOT add console approval link for deny decision", async () => {
     const comment = await runDenyAndGetCommentBody({ decision: "deny" });
     expect(comment).not.toContain("console.atlasent.io/approvals");

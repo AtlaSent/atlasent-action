@@ -419,6 +419,15 @@ async function notifyTeams(webhookUrl: string, opts: NotificationOpts): Promise<
 // and pr-comment-on-deny is not "false".
 // Best-effort: never blocks or alters the gate decision.
 // ---------------------------------------------------------------------------
+/**
+ * The console that holds this deployment's approvals and evidence: the
+ * `console-base-url` input, else production. A staging gate must set it
+ * (https://staging.atlasent.io), or its links point at the production console.
+ */
+function consoleBaseUrlInput(): string {
+  return (getInput("console-base-url") || "https://console.atlasent.io").replace(/\/$/, "");
+}
+
 function buildGateDenyComment(opts: {
   decision: string;
   reason: string;
@@ -428,7 +437,10 @@ function buildGateDenyComment(opts: {
   runUrl: string;
   evaluationId?: string;
   auditHash?: string;
+  /** Default: the console-base-url input. */
+  consoleBaseUrl?: string;
 }): string {
+  const consoleBase = opts.consoleBaseUrl ?? consoleBaseUrlInput();
   const icon =
     opts.decision === "deny"
       ? "🔴"
@@ -457,7 +469,7 @@ function buildGateDenyComment(opts: {
   if (opts.decision === "hold" || opts.decision === "escalate") {
     lines.push(
       "",
-      "> **Next step:** An authorized reviewer must approve this deployment in the [AtlaSent console](https://console.atlasent.io/approvals) or via the Slack Approval Bot.",
+      `> **Next step:** An authorized reviewer must approve this deployment in the [AtlaSent console](${consoleBase}/approvals) or via the Slack Approval Bot.`,
     );
   }
   return lines.join("\n");
@@ -1368,10 +1380,7 @@ async function runChangeBriefStep(apiKey: string, apiUrl: string): Promise<void>
   const targetSystem = getInput("change-brief-target-system") || "github";
   const targetId = getInput("change-brief-target-id") || getInput("target-id") || gh.repository;
   const changeRequest = getInput("change-request") || undefined;
-  const consoleBaseUrl = (getInput("console-base-url") || "https://console.atlasent.io").replace(
-    /\/$/,
-    "",
-  );
+  const consoleBaseUrl = consoleBaseUrlInput();
 
   const rollbackPreviousSha = getInput("rollback-previous-sha") || undefined;
   const rollbackWorkflow = getInput("rollback-workflow") || undefined;
@@ -2738,6 +2747,7 @@ export async function run(): Promise<void> {
                 : err.message;
         appendToStepSummary(
           buildGateStepSummary({
+            consoleBaseUrl: consoleBaseUrlInput(),
             outcome: summaryOutcome,
             action: actionType,
             actor: actorId,
@@ -3085,6 +3095,7 @@ export async function run(): Promise<void> {
 
       appendToStepSummary(
         buildGateStepSummary({
+            consoleBaseUrl: consoleBaseUrlInput(),
           outcome: "error",
           action: actionType,
           actor: actorId,
@@ -3257,6 +3268,7 @@ export async function run(): Promise<void> {
   // Best-effort: a summary failure must never affect the (already-granted) gate.
   appendToStepSummary(
     buildGateStepSummary({
+            consoleBaseUrl: consoleBaseUrlInput(),
       outcome: "allow",
       action: actionType,
       actor: actorId,

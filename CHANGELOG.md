@@ -4,6 +4,14 @@ All notable changes to `atlasent-action` are documented here.
 
 ## [Unreleased]
 
+### Fixed: approval links follow `console-base-url`
+
+The held/denied PR comment hard-coded `https://console.atlasent.io/approvals`.
+The job summaries ignored `console-base-url` the same way. A gate against the
+staging runtime therefore sent approvers to the production console. Both now
+use `console-base-url`, which still defaults to production. Set it to
+`https://staging.atlasent.io` on a staging gate.
+
 ### Added: deploy readback on `establish-effect`
 
 `establish-effect` now also outputs `deploy-readback`
