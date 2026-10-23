@@ -204,9 +204,11 @@ before the single-evaluation path will forward it.
 
 ## GitHub-derived facts cannot be overridden
 
-The optional `context` input is useful for application-specific facts such as
-service name, change-window state, or deployment metadata. Caller-supplied
-context is applied first.
+The optional `context` input is for descriptive application facts, such as the
+service name or deployment metadata. It is not for authorization evidence: a
+change window, an approval count or anything else a policy treats as proof
+must come from the runtime or a verified source, never from a value the
+workflow types in. Caller-supplied context is applied first.
 
 Facts derived or verified from the GitHub runtime are then applied last and win
 on collision. These include repository, ref, SHA, workflow/run metadata, PR
