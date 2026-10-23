@@ -2277,8 +2277,9 @@ export async function run(): Promise<void> {
   // `context.approvals` count without a second integration. Best-effort and
   // fail-open-to-zero: any failure leaves approvals at 0, which denies a
   // count-gated deploy (the fail-closed direction). `approvals-from: none`
-  // skips the lookup entirely. The operator's `context` input always wins,
-  // so an explicit `approvals` there overrides what we derive.
+  // skips the lookup entirely. Derived approvals are applied AFTER the
+  // operator's `context`, so a caller-entered count never overrides them; in
+  // `none` mode a caller-entered count passes through as an unverified claim.
   const approvalsFrom = (getInput("approvals-from") || "pr-reviews").toLowerCase();
   let approvalEvidence: ApprovalEvidence | null = null;
   if (approvalsFrom === "pr-reviews") {
