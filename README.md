@@ -238,8 +238,11 @@ Provide `GITHUB_TOKEN` when the policy depends on review evidence:
   with:
     action: production.deploy
     environment: live
-    context: '{"change_window": true}'
 ```
+
+Do not put a change window or an approval count in `context`. The runtime
+enforces change windows itself, and a value the workflow types in is never
+authorization evidence.
 
 If review lookup fails, the derived approval count falls to zero. For an
 approval-gated policy that is the fail-closed direction: the workflow does not
