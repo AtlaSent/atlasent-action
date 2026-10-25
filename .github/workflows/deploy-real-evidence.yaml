@@ -6,6 +6,10 @@ on:
 
 permissions:
   contents: read
+  # The gate mints the run's workload identity from GitHub OIDC and refuses
+  # to fall back to a caller-supplied actor when it cannot (fail-closed).
+  # Without this, every run stopped at "GitHub OIDC is unavailable".
+  id-token: write
   pull-requests: read
   statuses: write
 
