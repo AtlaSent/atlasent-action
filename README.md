@@ -866,6 +866,83 @@ Outputs: `posture-findings` (JSON array, one entry per signal — see
 distinct bucket, never folded into "not observable"). A job summary table is
 also written.
 
+## Rehearsal mode (atlasent-console#3377)
+
+Rehearsal mode lets you prove, from your own workflow, that the AtlaSent
+runtime refuses what it should and allows what it should for one protected
+action. It runs five cases for the same `action`, `target-id` and
+`environment`. Every evaluate carries `context.rehearsal_request_id` and
+`context.rehearsal_case`, so the AtlaSent console can find the runtime's own
+records of these calls and decide whether the rehearsal passed.
+
+| Case | What the step sends | Expected |
+|---|---|---|
+| `unauthorized_denied` | evaluate with no `actor_identity`, `actor_id` `rehearsal:unverified-actor` | deny `ACTOR_UNVERIFIED` |
+| `missing_approval_denied_or_held` | evaluate with a verified workload actor and `context.approvals: 0` | deny `INSUFFICIENT_APPROVALS`, or hold/escalate (never waited on) |
+| `authorized_action_succeeds` | evaluate with a verified actor and the approvals `approvals-from` derives, then a consuming verify | allow with a permit, then verified |
+| `changed_or_replayed_denied` | the same permit verified again | refused `PERMIT_ALREADY_USED` |
+| `changed_target_denied` | a fresh allow, verified for `<target-id>--rehearsal-changed`, then for its own target | refused `PERMIT_BINDING_MISMATCH`, then verified |
+
+All five cases send the same `change_plan`, built the way the single-eval path
+builds it. Its revision comes from the commit in the verified workload
+identity. Every evaluate and verify that presents an identity mints a new
+`actor_identity.v1` for that call, from a new GitHub OIDC token. Case 1
+presents no identity.
+
+The step fails if any input is invalid, if a call fails at the transport or
+HTTP level, if an identity cannot be minted, or if any case is `unexpected`
+or `not_run`. It passes only when all five cases behave as expected. **That
+verdict is informational.** The console's server-side check of the runtime's
+records decides whether the rehearsal passed. A rehearsal authorizes nothing:
+`verified` is always `"false"`, so never gate a deploy on this step.
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      rehearsal-request-id:
+        description: Rehearsal id from the AtlaSent console
+        required: true
+
+jobs:
+  rehearse:
+    runs-on: ubuntu-latest
+    environment: production   # the GitHub Environment your workload binding is enrolled for
+    permissions:
+      id-token: write         # GitHub workload identity, minted per call
+      contents: read
+      pull-requests: read     # approvals-from: pr-reviews (case 3 and case 5)
+    steps:
+      - uses: AtlaSent-Systems-Inc/atlasent-action@v1
+        env:
+          ATLASENT_API_KEY: ${{ secrets.ATLASENT_API_KEY }}   # evaluate:write, verify:execute, idp_broker:mint
+          ATLASENT_BASE_URL: ${{ secrets.ATLASENT_BASE_URL }}
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          rehearsal-request-id: ${{ inputs.rehearsal-request-id }}
+          action: production.deploy
+          target-id: api-service
+          environment: production
+```
+
+Inputs: `rehearsal-request-id` must be a UUID. `action` must be one of the
+four mandatory change-control actions (`production.deploy`,
+`infrastructure.change`, `production.rollback`,
+`secret.configuration.change`). `target-id` and an explicit `environment` are
+required, because rehearsal mode never derives the environment. `artifact-digest`
+(it becomes `change_plan.artifact_ref`) and `approvals-from` behave as they do
+on the single-eval path. The step validates every input before it makes any
+network call.
+
+Outputs: `rehearsal-request-id`, `rehearsal-verdict` (`all_expected` or
+`unexpected`) and `rehearsal-cases`. `rehearsal-cases` is a JSON array of
+`{case_id, status, decision, deny_code, request_id, verify_outcome?,
+verify_error_code?}`, plus `control_verify_*` for case 5's own-target verify.
+It never contains a permit token. The step also writes a job-summary table.
+
+A rehearsal makes real runtime calls. Case 2 can open a pending approval
+request (hold/escalate), and cases 3 and 5 consume real permits.
+
 ## Other modes
 
 The repository also contains additional CI-oriented surfaces such as batch

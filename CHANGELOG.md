@@ -4,6 +4,27 @@ All notable changes to `atlasent-action` are documented here.
 
 ## [Unreleased]
 
+### Added: authorization rehearsal mode (atlasent-console#3377)
+
+Setting `rehearsal-request-id` (a UUID the AtlaSent console issues) runs five
+authorization cases against the runtime for one mandatory change-control
+action:
+- an unverified actor is denied;
+- missing approval is denied or held;
+- an authorized action is allowed and verified;
+- a replayed permit is refused;
+- a permit presented for a changed target is refused.
+
+Each evaluate carries `context.rehearsal_request_id` and
+`context.rehearsal_case`, so the console can check the runtime's own records.
+A fresh workload `actor_identity.v1` is minted for every evaluate and verify
+that presents one. The step's `rehearsal-verdict` is informational, and
+`verified` is always `"false"`. New outputs: `rehearsal-request-id`,
+`rehearsal-cases` and `rehearsal-verdict`. See README, "Rehearsal mode".
+
+The single-eval path now builds its `change_plan` through the shared
+`src/changePlan.ts` helper. Its behaviour is unchanged.
+
 ### Fixed: approval links follow `console-base-url`
 
 The held/denied PR comment hard-coded `https://console.atlasent.io/approvals`.
