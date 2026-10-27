@@ -988,24 +988,22 @@ async function runRehearsalStep(apiKey: string, apiUrl: string): Promise<void> {
     return failInput("`environment` is required and is not derived in rehearsal mode.");
   }
 
+  // Bounds case 3's wait for a person to approve case 2's held request. The
+  // console's rehearsal window is one hour, so a longer wait cannot pass.
+  const rawMaxWait = getInput("max-wait-minutes") || "30";
+  const maxWaitMinutes = Number(rawMaxWait);
+  if (!Number.isInteger(maxWaitMinutes) || maxWaitMinutes < 1 || maxWaitMinutes > 50) {
+    return failInput(`\`max-wait-minutes\` must be a whole number from 1 to 50 in rehearsal mode (got "${rawMaxWait}").`);
+  }
+
   const artifactDigest = getInput("artifact-digest") || undefined;
   const gh = getGitHubContext();
 
-  // Same derivation as the single-eval path (used by cases 1, 3 and 5; case
-  // 2 always sends approvals 0).
-  const approvalsFrom = (getInput("approvals-from") || "pr-reviews").toLowerCase();
-  const approvalEvidence: ApprovalEvidence | null =
-    approvalsFrom === "pr-reviews"
-      ? await resolveApprovals({
-          repository: gh.repository,
-          sha: gh.sha,
-          prNumber: gh.pr_number ?? null,
-          token: process.env["GITHUB_TOKEN"],
-          apiBase: process.env["GITHUB_API_URL"],
-          log: info,
-          warn: warning,
-        })
-      : null;
+  // No approval count is derived or sent: the only approval in a rehearsal
+  // is a person's, given in the console on case 2's held request.
+  if (getInput("approvals-from")) {
+    info("AtlaSent rehearsal: approvals-from is ignored; case 3 is approved by a person in the AtlaSent console.");
+  }
 
   info(
     `AtlaSent rehearsal ${requestId}: running 5 authorization cases for "${actionType}" ` +
@@ -1021,7 +1019,7 @@ async function runRehearsalStep(apiKey: string, apiUrl: string): Promise<void> {
       targetId,
       environment,
       artifactDigest,
-      approvalEvidence,
+      maxWaitMs: maxWaitMinutes * 60_000,
       github: gh,
     },
     { mask: maskValue, log: info },

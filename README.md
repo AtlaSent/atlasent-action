@@ -875,26 +875,42 @@ action. It runs five cases for the same `action`, `target-id` and
 `context.rehearsal_case`, so the AtlaSent console can find the runtime's own
 records of these calls and decide whether the rehearsal passed.
 
-| Case | What the step sends | Expected |
+The approval-requiring case is approved by **a real person in the AtlaSent
+console**, under an approver grant with a fresh second factor. The step never
+sends an approval count of its own: every evaluate carries
+`context.approvals: 0`, and `approvals-from` is ignored. Case 2's held request
+is the one that person approves, so a rehearsal opens exactly one approval
+request.
+
+| Case | What the step does | Expected |
 |---|---|---|
 | `unauthorized_denied` | evaluate with no `actor_identity`, `actor_id` `rehearsal:unverified-actor` | deny `ACTOR_UNVERIFIED` |
-| `missing_approval_denied_or_held` | evaluate with a verified workload actor and `context.approvals: 0` | deny `INSUFFICIENT_APPROVALS`, or hold/escalate (never waited on) |
-| `authorized_action_succeeds` | evaluate with a verified actor and the approvals `approvals-from` derives, then a consuming verify | allow with a permit, then verified |
-| `changed_or_replayed_denied` | the same permit verified again | refused `PERMIT_ALREADY_USED` |
-| `changed_target_denied` | a fresh allow, verified for `<target-id>--rehearsal-changed`, then for its own target | refused `PERMIT_BINDING_MISMATCH`, then verified |
+| `missing_approval_denied_or_held` | evaluate with a verified workload actor | hold/escalate with an approval request, no permit. A deny `INSUFFICIENT_APPROVALS` also refuses, but leaves case 3 nothing to approve |
+| `authorized_action_succeeds` | wait for a person to approve case 2's request, claim the permit with a fresh identity and the same change plan, verify it for its own target | the claim's reevaluation allows with a permit, then verified |
+| `changed_or_replayed_denied` | case 3's consumed permit verified again | refused `PERMIT_ALREADY_USED` |
+| `changed_target_denied` | case 3's permit verified for `<target-id>--rehearsal-changed` **before** its own verify | refused `PERMIT_BINDING_MISMATCH`, nothing consumed (case 3's own verify is the control) |
 
-All five cases send the same `change_plan`, built the way the single-eval path
+When case 2 is held, the step logs and summarizes its approval request id.
+Approve that request in the console (My approvals); nothing else in the run
+asks for approval. The step waits up to `max-wait-minutes` (1–50, default 30;
+the console's rehearsal window is one hour). If nobody approves in time,
+case 3 is `unexpected` (`approval_status: timed_out`) and cases 4 and 5 are
+not run.
+
+All calls send the same `change_plan`, built the way the single-eval path
 builds it. Its revision comes from the commit in the verified workload
-identity. Every evaluate and verify that presents an identity mints a new
-`actor_identity.v1` for that call, from a new GitHub OIDC token. Case 1
+identity. Every evaluate, claim and verify that presents an identity mints a
+new `actor_identity.v1` for that call, from a new GitHub OIDC token. Case 1
 presents no identity.
 
 The step fails if any input is invalid, if a call fails at the transport or
 HTTP level, if an identity cannot be minted, or if any case is `unexpected`
 or `not_run`. It passes only when all five cases behave as expected. **That
 verdict is informational.** The console's server-side check of the runtime's
-records decides whether the rehearsal passed. A rehearsal authorizes nothing:
-`verified` is always `"false"`, so never gate a deploy on this step.
+records decides whether the rehearsal passed, including who approved case 2's
+request and the second factor recorded with that approval. A rehearsal
+authorizes nothing: `verified` is always `"false"`, so never gate a deploy on
+this step.
 
 ```yaml
 on:
@@ -911,37 +927,39 @@ jobs:
     permissions:
       id-token: write         # GitHub workload identity, minted per call
       contents: read
-      pull-requests: read     # approvals-from: pr-reviews (case 3 and case 5)
     steps:
       - uses: AtlaSent-Systems-Inc/atlasent-action@v1
         env:
-          ATLASENT_API_KEY: ${{ secrets.ATLASENT_API_KEY }}   # evaluate:write, verify:execute, idp_broker:mint
+          ATLASENT_API_KEY: ${{ secrets.ATLASENT_API_KEY }}   # evaluate:write, verify:execute, idp_broker:mint, approvals:read
           ATLASENT_BASE_URL: ${{ secrets.ATLASENT_BASE_URL }}
-          GITHUB_TOKEN: ${{ github.token }}
         with:
           rehearsal-request-id: ${{ inputs.rehearsal-request-id }}
           action: production.deploy
           target-id: api-service
           environment: production
+          max-wait-minutes: '30'
 ```
 
 Inputs: `rehearsal-request-id` must be a UUID. `action` must be one of the
 four mandatory change-control actions (`production.deploy`,
 `infrastructure.change`, `production.rollback`,
 `secret.configuration.change`). `target-id` and an explicit `environment` are
-required, because rehearsal mode never derives the environment. `artifact-digest`
-(it becomes `change_plan.artifact_ref`) and `approvals-from` behave as they do
-on the single-eval path. The step validates every input before it makes any
-network call.
+required, because rehearsal mode never derives the environment.
+`artifact-digest` becomes `change_plan.artifact_ref`, as on the single-eval
+path. `max-wait-minutes` must be a whole number from 1 to 50. The step
+validates every input before it makes any network call.
 
 Outputs: `rehearsal-request-id`, `rehearsal-verdict` (`all_expected` or
 `unexpected`) and `rehearsal-cases`. `rehearsal-cases` is a JSON array of
 `{case_id, status, decision, deny_code, request_id, verify_outcome?,
-verify_error_code?}`, plus `control_verify_*` for case 5's own-target verify.
-It never contains a permit token. The step also writes a job-summary table.
+verify_error_code?}`. It also carries `approval_request_id` (cases 2 and 3),
+`approval_status`/`claim_failure` (case 3), and `control_verify_*` (case 5:
+case 3's own-target verify). For case 3 and later, `request_id` is the claim's
+reevaluation. It never contains a permit token. The step also writes a
+job-summary table.
 
-A rehearsal makes real runtime calls. Case 2 can open a pending approval
-request (hold/escalate), and cases 3 and 5 consume real permits.
+A rehearsal makes real runtime calls. Case 2 opens a pending approval request,
+and the claimed permit is consumed by case 3.
 
 ## Other modes
 

@@ -50,7 +50,7 @@ inputs:
     required: false
     default: 'false'
   max-wait-minutes:
-    description: 'Maximum minutes to wait for a human decision when wait-for-approval is "true" (default: 30). Exceeding this fails the step closed — no deploy without a resolution inside the window.'
+    description: 'Maximum minutes to wait for a human decision when wait-for-approval is "true" (default: 30). Exceeding this fails the step closed — no deploy without a resolution inside the window. In rehearsal mode it bounds case 3''s wait for a person to approve case 2''s held request (1-50).'
     required: false
     default: '30'
   environment:
@@ -478,13 +478,13 @@ inputs:
     required: false
   rehearsal-request-id:
     description: |
-      Set to the rehearsal id the AtlaSent console issued (a UUID) to run AUTHORIZATION REHEARSAL mode (atlasent-console#3377) instead of a gate. Runs five cases against the runtime for ONE protected action, each evaluate carrying context.rehearsal_request_id and context.rehearsal_case:
+      Set to the rehearsal id the AtlaSent console issued (a UUID) to run AUTHORIZATION REHEARSAL mode (atlasent-console#3377) instead of a gate. Runs five cases against the runtime for ONE protected action; every evaluate carries context.rehearsal_request_id, context.rehearsal_case and context.approvals 0 (no approval count is ever derived or sent):
         1. unauthorized_denied: evaluate with no actor_identity (actor_id rehearsal:unverified-actor); expects deny ACTOR_UNVERIFIED.
-        2. missing_approval_denied_or_held: verified actor, context.approvals 0; expects deny INSUFFICIENT_APPROVALS, or hold/escalate (never waited on).
-        3. authorized_action_succeeds: verified actor, approvals derived as on the single-eval path (approvals-from); expects allow, then a consuming verify.
-        4. changed_or_replayed_denied: the case-3 permit verified again; expects PERMIT_ALREADY_USED.
-        5. changed_target_denied: a fresh allow, verified for target-id + "--rehearsal-changed" (expects PERMIT_BINDING_MISMATCH), then for its own target (expects verified).
-      Requires action (production.deploy, infrastructure.change, production.rollback or secret.configuration.change), target-id and an explicit environment, plus `permissions: id-token: write`; a fresh workload actor_identity.v1 is minted for every evaluate and verify that presents one. API key scopes: evaluate:write, verify:execute, idp_broker:mint. The step fails on any invalid input, transport/HTTP error, identity mint failure, or case that is not as expected. Its verdict is informational: the console decides from the runtime's own records. A rehearsal authorizes nothing (verified is always "false").
+        2. missing_approval_denied_or_held: verified actor; expects a hold/escalate with an approval request and no permit (a deny INSUFFICIENT_APPROVALS also refuses, but leaves case 3 nothing to approve).
+        3. authorized_action_succeeds: a person approves case 2's held request in the AtlaSent console (under an approver grant with a fresh second factor). The step waits up to max-wait-minutes (1-50, default 30), claims the permit with a freshly minted identity and the same change plan, and verifies it for its own target.
+        4. changed_or_replayed_denied: case 3's consumed permit verified again; expects PERMIT_ALREADY_USED.
+        5. changed_target_denied: case 3's permit verified for target-id + "--rehearsal-changed" BEFORE its own verify; expects PERMIT_BINDING_MISMATCH with nothing consumed (case 3's own verify is the control).
+      Requires action (production.deploy, infrastructure.change, production.rollback or secret.configuration.change), target-id and an explicit environment, plus `permissions: id-token: write`; a fresh workload actor_identity.v1 is minted for every evaluate, claim and verify that presents one. API key scopes: evaluate:write, verify:execute, idp_broker:mint, approvals:read (the claim). approvals-from is ignored. The step fails on any invalid input, transport/HTTP error, identity mint failure, or case that is not as expected (including nobody approving in time). Its verdict is informational: the console decides from the runtime's own records, including who approved and the second factor recorded with the approval. A rehearsal authorizes nothing (verified is always "false").
     required: false
 outputs:
   solo-attestation-id:
