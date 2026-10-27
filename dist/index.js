@@ -182,7 +182,7 @@ var require_dist = __commonJS({
     exports2.evaluate = evaluate3;
     exports2.denyReasonText = denyReasonText2;
     exports2.verify = verify2;
-    exports2.waitForApprovalResolution = waitForApprovalResolution3;
+    exports2.waitForApprovalResolution = waitForApprovalResolution4;
     exports2.requiredBindingsFor = requiredBindingsFor5;
     exports2.verifyPermit = verifyPermit5;
     exports2.reverifyPermit = reverifyPermit2;
@@ -390,7 +390,7 @@ var require_dist = __commonJS({
         reEvaluationId: typeof reEvaluationId === "string" && reEvaluationId.length > 0 ? reEvaluationId : void 0
       };
     }
-    async function waitForApprovalResolution3(config) {
+    async function waitForApprovalResolution4(config) {
       if (!config.approvalId) {
         throw new EnforceError3("Cannot wait for approval: no approvalRequestId on the hold/escalate decision", "evaluate");
       }
@@ -2063,10 +2063,10 @@ var REHEARSAL_CASE_IDS = [
 ];
 var REHEARSAL_CASE_EXPECTATIONS = {
   unauthorized_denied: "deny ACTOR_UNVERIFIED (no verified actor), no permit",
-  missing_approval_denied_or_held: "deny INSUFFICIENT_APPROVALS, or hold/escalate (approvals 0), no permit",
-  authorized_action_succeeds: "allow with a permit and execution hash, then verified",
-  changed_or_replayed_denied: "the same permit presented again is refused PERMIT_ALREADY_USED",
-  changed_target_denied: "a fresh permit presented for a changed target is refused PERMIT_BINDING_MISMATCH, then verified for its own target"
+  missing_approval_denied_or_held: "held (hold/escalate) with an approval request and no permit; a deny INSUFFICIENT_APPROVALS also refuses, but leaves case 3 nothing to approve",
+  authorized_action_succeeds: "a person approves case 2's held request in the AtlaSent console; the claim's reevaluation allows with a permit and execution hash, which then verifies for its own target",
+  changed_or_replayed_denied: "case 3's consumed permit presented again is refused PERMIT_ALREADY_USED",
+  changed_target_denied: "case 3's permit presented for a changed target, before its own verify, is refused PERMIT_BINDING_MISMATCH and not consumed"
 };
 var UNVERIFIED_REHEARSAL_ACTOR = "rehearsal:unverified-actor";
 var CHANGED_TARGET_SUFFIX = "--rehearsal-changed";
@@ -2091,8 +2091,8 @@ function runtimeVerifyRefusal(err) {
     return null;
   return { outcome: err.outcome, code: err.verifyErrorCode };
 }
-function isVerifiableAllow(d) {
-  return d.decision === "allow" && !!d.permitToken && !!d.executionHashExpected;
+function isApprovableHold(d) {
+  return (d.decision === "hold" || d.decision === "escalate") && !!d.approvalRequestId && !d.permitToken;
 }
 function decisionFields(d) {
   return {
@@ -2116,7 +2116,7 @@ async function runRehearsal(args, deps) {
   const record = (r) => {
     results.set(r.case_id, r);
     deps.log(
-      `  [${r.status}] ${r.case_id}: decision=${r.decision ?? "-"} deny_code=${r.deny_code ?? "-"}` + (r.verify_outcome !== void 0 || r.verify_error_code !== void 0 ? ` verify=${r.verify_outcome ?? "-"}/${r.verify_error_code ?? "-"}` : "") + (r.control_verify_outcome !== void 0 || r.control_verify_error_code !== void 0 ? ` control_verify=${r.control_verify_outcome ?? "-"}/${r.control_verify_error_code ?? "-"}` : "") + ` request_id=${r.request_id ?? "-"}`
+      `  [${r.status}] ${r.case_id}: decision=${r.decision ?? "-"} deny_code=${r.deny_code ?? "-"}` + (r.verify_outcome !== void 0 || r.verify_error_code !== void 0 ? ` verify=${r.verify_outcome ?? "-"}/${r.verify_error_code ?? "-"}` : "") + (r.control_verify_outcome !== void 0 || r.control_verify_error_code !== void 0 ? ` control_verify=${r.control_verify_outcome ?? "-"}/${r.control_verify_error_code ?? "-"}` : "") + (r.approval_request_id !== void 0 || r.approval_status !== void 0 ? ` approval=${r.approval_request_id ?? "-"}/${r.approval_status ?? "-"}` + (r.claim_failure !== void 0 ? `/${r.claim_failure}` : "") : "") + ` request_id=${r.request_id ?? "-"}`
     );
   };
   const finish = (error) => {
@@ -2170,10 +2170,6 @@ async function runCases(args, deps, record) {
     throw new RehearsalError(`"${actionType}" is not a mandatory change-control action`);
   }
   const triggeringActor = `github:${case2Identity.source.actor}`;
-  const derivedApprovals = args.approvalEvidence ? {
-    approvals: args.approvalEvidence.approvals,
-    approving_reviewers: args.approvalEvidence.approving_reviewers
-  } : {};
   const evalConfig = (caseId, opts) => ({
     apiKey,
     apiUrl,
@@ -2194,11 +2190,13 @@ async function runCases(args, deps, record) {
       run_number: gh.run_number,
       event_name: gh.event_name,
       triggering_actor: triggeringActor,
-      pr_number: args.approvalEvidence?.pr_number ?? gh.pr_number ?? null,
+      pr_number: gh.pr_number ?? null,
       run_url: `${gh.server_url}/${gh.repository}/actions/runs/${gh.run_id}`,
-      ...opts.approvals,
-      // Applied last: nothing above can shadow the markers the console
-      // finds these evaluations by.
+      // Applied last: nothing above can shadow them. No approval count is
+      // ever asserted by the caller; the only approval is a person's, in the
+      // console. The rehearsal markers are how the console finds these
+      // evaluations.
+      approvals: 0,
       rehearsal_request_id: requestId,
       rehearsal_case: caseId
     }
@@ -2238,93 +2236,154 @@ async function runCases(args, deps, record) {
     }
   };
   {
-    const d = await evaluateCase(
-      evalConfig("unauthorized_denied", { actor: UNVERIFIED_REHEARSAL_ACTOR, approvals: derivedApprovals })
-    );
-    const expected2 = d.decision === "deny" && d.denyCode === "ACTOR_UNVERIFIED" && !d.permitToken;
-    record({ case_id: "unauthorized_denied", status: expected2 ? "expected" : "unexpected", ...decisionFields(d) });
+    const d = await evaluateCase(evalConfig("unauthorized_denied", { actor: UNVERIFIED_REHEARSAL_ACTOR }));
+    const expected = d.decision === "deny" && d.denyCode === "ACTOR_UNVERIFIED" && !d.permitToken;
+    record({ case_id: "unauthorized_denied", status: expected ? "expected" : "unexpected", ...decisionFields(d) });
   }
-  {
-    const d = await evaluateCase(
-      evalConfig("missing_approval_denied_or_held", {
-        actor: case2Identity.actorId,
-        identity: case2Identity,
-        approvals: { approvals: 0 }
-      })
-    );
-    const refused = d.decision === "deny" && d.denyCode === "INSUFFICIENT_APPROVALS" || d.decision === "hold" || d.decision === "escalate";
-    record({
-      case_id: "missing_approval_denied_or_held",
-      status: refused && !d.permitToken ? "expected" : "unexpected",
-      ...decisionFields(d)
-    });
-  }
-  const case3Identity = await mintFresh("case 3 evaluate");
-  const d3 = await evaluateCase(
-    evalConfig("authorized_action_succeeds", {
-      actor: case3Identity.actorId,
-      identity: case3Identity,
-      approvals: derivedApprovals
-    })
+  const d2 = await evaluateCase(
+    evalConfig("missing_approval_denied_or_held", { actor: case2Identity.actorId, identity: case2Identity })
   );
-  const case3Allowed = isVerifiableAllow(d3);
-  let case3Verified = false;
-  if (!case3Allowed) {
-    record({ case_id: "authorized_action_succeeds", status: "unexpected", ...decisionFields(d3) });
-  } else {
-    const v = await verifyCase(d3, targetId, "case 3 verify");
-    case3Verified = v.verified;
+  const held = isApprovableHold(d2);
+  const deniedForApprovals = d2.decision === "deny" && d2.denyCode === "INSUFFICIENT_APPROVALS" && !d2.permitToken;
+  record({
+    case_id: "missing_approval_denied_or_held",
+    status: held || deniedForApprovals ? "expected" : "unexpected",
+    ...decisionFields(d2),
+    ...d2.approvalRequestId ? { approval_request_id: d2.approvalRequestId } : {}
+  });
+  if (!held) {
     record({
       case_id: "authorized_action_succeeds",
-      status: v.verified ? "expected" : "unexpected",
-      ...decisionFields(d3),
-      verify_outcome: v.outcome ?? (v.verified ? "verified" : void 0),
-      ...v.code !== void 0 ? { verify_error_code: v.code } : {}
-    });
-  }
-  if (!case3Verified) {
-    record(notRun("changed_or_replayed_denied", d3.evaluationId ?? null));
-  } else {
-    const v = await verifyCase(d3, targetId, "case 4 replay verify");
-    record({
-      case_id: "changed_or_replayed_denied",
-      status: !v.verified && v.code === "PERMIT_ALREADY_USED" ? "expected" : "unexpected",
+      status: "unexpected",
       decision: null,
       deny_code: null,
-      request_id: d3.evaluationId ?? null,
-      verify_outcome: v.outcome ?? (v.verified ? "verified" : void 0),
-      ...v.code !== void 0 ? { verify_error_code: v.code } : {}
+      request_id: null,
+      approval_status: "no_approval_request"
     });
-  }
-  if (!case3Allowed) {
+    record(notRun("changed_or_replayed_denied"));
     record(notRun("changed_target_denied"));
     return;
   }
-  const case5Identity = await mintFresh("case 5 evaluate");
-  const d5 = await evaluateCase(
-    evalConfig("changed_target_denied", {
-      actor: case5Identity.actorId,
-      identity: case5Identity,
-      approvals: derivedApprovals
-    })
+  const approvalId = d2.approvalRequestId;
+  deps.log(
+    `AtlaSent rehearsal ${requestId}: case 2 is held as approval request ${approvalId}. Waiting up to ${Math.round(args.maxWaitMs / 6e4)} minute(s) for a person to approve it in the AtlaSent console (My approvals). Approve that request only; nothing else in this run asks for approval.`
   );
-  if (!isVerifiableAllow(d5)) {
-    record({ case_id: "changed_target_denied", status: "not_run", ...decisionFields(d5) });
+  const waitStarted = Date.now();
+  let resolution;
+  try {
+    resolution = await (0, import_enforce9.waitForApprovalResolution)({
+      apiKey,
+      apiUrl,
+      approvalId,
+      maxWaitMs: args.maxWaitMs,
+      // Built at claim time: the approval may take minutes, and the claimer
+      // must be this same workload, with the same change plan (the runtime
+      // refuses a changed plan with 409 change_plan_mismatch).
+      buildClaimBody: async (row) => {
+        if (row.claimEnvironment != null && row.claimEnvironment !== environment) {
+          throw new RehearsalError(
+            `the approval must be claimed for environment "${row.claimEnvironment}", not "${environment}"`
+          );
+        }
+        const claimer = await mintFresh("case 3 claim");
+        return { actor_identity: claimer.assertion, change_plan: changePlan };
+      }
+    });
+  } catch (err) {
+    if (err instanceof import_enforce9.EnforceError && Date.now() - waitStarted >= args.maxWaitMs) {
+      record({
+        case_id: "authorized_action_succeeds",
+        status: "unexpected",
+        decision: null,
+        deny_code: null,
+        request_id: null,
+        approval_request_id: approvalId,
+        approval_status: "timed_out"
+      });
+      record(notRun("changed_or_replayed_denied"));
+      record(notRun("changed_target_denied"));
+      return;
+    }
+    throw err;
+  }
+  if (resolution.permitToken)
+    deps.mask(resolution.permitToken);
+  const claimed = (resolution.status === "approved" || resolution.status === "approved_awaiting_claim") && !!resolution.permitToken && !!resolution.executionHashExpected;
+  const approvalFields = {
+    approval_request_id: approvalId,
+    approval_status: resolution.status,
+    ...resolution.claimFailure ? { claim_failure: resolution.claimFailure } : {}
+  };
+  if (!claimed) {
+    record({
+      case_id: "authorized_action_succeeds",
+      status: "unexpected",
+      decision: resolution.reEvaluationDecision ?? null,
+      deny_code: null,
+      request_id: resolution.reEvaluationId ?? null,
+      ...approvalFields,
+      ...resolution.permitToken && !resolution.executionHashExpected ? { claim_failure: resolution.claimFailure ?? "no_execution_hash" } : {}
+    });
+    record(notRun("changed_or_replayed_denied", resolution.reEvaluationId ?? null));
+    record(notRun("changed_target_denied", resolution.reEvaluationId ?? null));
     return;
   }
-  const changed = await verifyCase(d5, `${targetId}${CHANGED_TARGET_SUFFIX}`, "case 5 changed-target verify");
-  const control = changed.verified ? void 0 : await verifyCase(d5, targetId, "case 5 control verify");
-  const expected = !changed.verified && changed.code === "PERMIT_BINDING_MISMATCH" && control?.verified === true;
+  const d3 = {
+    decision: "allow",
+    permitToken: resolution.permitToken,
+    executionHashExpected: resolution.executionHashExpected,
+    evaluationId: resolution.reEvaluationId,
+    approvalRequestId: approvalId
+  };
+  const case3Fields = {
+    decision: "allow",
+    deny_code: null,
+    request_id: resolution.reEvaluationId ?? null,
+    ...approvalFields
+  };
+  const changed = await verifyCase(d3, `${targetId}${CHANGED_TARGET_SUFFIX}`, "case 5 changed-target verify");
+  if (changed.verified) {
+    record({
+      case_id: "changed_target_denied",
+      status: "unexpected",
+      ...case3Fields,
+      verify_outcome: changed.outcome ?? "verified",
+      ...changed.code !== void 0 ? { verify_error_code: changed.code } : {}
+    });
+    record({ case_id: "authorized_action_succeeds", status: "unexpected", ...case3Fields });
+    record(notRun("changed_or_replayed_denied", resolution.reEvaluationId ?? null));
+    return;
+  }
+  const own = await verifyCase(d3, targetId, "case 3 verify");
+  record({
+    case_id: "authorized_action_succeeds",
+    status: own.verified ? "expected" : "unexpected",
+    ...case3Fields,
+    verify_outcome: own.outcome ?? (own.verified ? "verified" : void 0),
+    ...own.code !== void 0 ? { verify_error_code: own.code } : {}
+  });
   record({
     case_id: "changed_target_denied",
-    status: expected ? "expected" : "unexpected",
-    ...decisionFields(d5),
-    verify_outcome: changed.outcome ?? (changed.verified ? "verified" : void 0),
+    status: changed.code === "PERMIT_BINDING_MISMATCH" && own.verified ? "expected" : "unexpected",
+    ...case3Fields,
+    verify_outcome: changed.outcome,
     ...changed.code !== void 0 ? { verify_error_code: changed.code } : {},
-    ...control ? {
-      control_verify_outcome: control.outcome ?? (control.verified ? "verified" : void 0),
-      ...control.code !== void 0 ? { control_verify_error_code: control.code } : {}
-    } : {}
+    control_verify_outcome: own.outcome ?? (own.verified ? "verified" : void 0),
+    ...own.code !== void 0 ? { control_verify_error_code: own.code } : {}
+  });
+  if (!own.verified) {
+    record(notRun("changed_or_replayed_denied", resolution.reEvaluationId ?? null));
+    return;
+  }
+  const replay = await verifyCase(d3, targetId, "case 4 replay verify");
+  record({
+    case_id: "changed_or_replayed_denied",
+    status: !replay.verified && replay.code === "PERMIT_ALREADY_USED" ? "expected" : "unexpected",
+    decision: null,
+    deny_code: null,
+    request_id: resolution.reEvaluationId ?? null,
+    verify_outcome: replay.outcome ?? (replay.verified ? "verified" : void 0),
+    ...replay.code !== void 0 ? { verify_error_code: replay.code } : {}
   });
 }
 function cell(value) {
@@ -2345,7 +2404,8 @@ function renderRehearsalStepSummary(report, meta) {
   };
   const rows = report.cases.map((c) => {
     const verify2 = verifyCell(c.verify_outcome, c.verify_error_code) + (c.control_verify_outcome !== void 0 || c.control_verify_error_code !== void 0 ? `; own target: ${verifyCell(c.control_verify_outcome, c.control_verify_error_code)}` : "");
-    return `| \`${c.case_id}\` | ${REHEARSAL_CASE_EXPECTATIONS[c.case_id]} | ${statusLabel[c.status]} | ${cell(c.decision)} | ${cell(c.deny_code)} | ${verify2} | ${cell(c.request_id)} |`;
+    const approval = c.approval_request_id === void 0 && c.approval_status === void 0 ? "\u2014" : [c.approval_request_id, c.approval_status, c.claim_failure].filter((v) => v !== void 0 && v !== "").map((v) => cell(v)).join(" / ");
+    return `| \`${c.case_id}\` | ${REHEARSAL_CASE_EXPECTATIONS[c.case_id]} | ${statusLabel[c.status]} | ${cell(c.decision)} | ${cell(c.deny_code)} | ${approval} | ${verify2} | ${cell(c.request_id)} |`;
   });
   const heading = report.verdict === "all_expected" ? "## AtlaSent authorization rehearsal: all five cases as expected" : "## AtlaSent authorization rehearsal: NOT all cases as expected";
   return [
@@ -2355,12 +2415,12 @@ function renderRehearsalStepSummary(report, meta) {
     "",
     `Rehearsal \`${report.requestId}\` for \`${meta.actionType}\` on target \`${meta.targetId}\` in \`${meta.environment}\`.`,
     "",
-    "| Case | Expected | Status | Decision | Deny code | Verify | Request ID |",
-    "|---|---|---|---|---|---|---|",
+    "| Case | Expected | Status | Decision | Deny code | Approval | Verify | Evaluation ID |",
+    "|---|---|---|---|---|---|---|---|",
     ...rows,
     "",
     ...report.error ? [`Stopped early: ${report.error.replace(/[\r\n]/g, " ").slice(0, 500)}`, ""] : [],
-    "> **This verdict is informational.** The AtlaSent console decides whether the rehearsal passed from the runtime's own records of these calls (found by `context.rehearsal_request_id`). That server-side check is what counts. A rehearsal never authorizes a protected step.",
+    "> **This verdict is informational.** The AtlaSent console decides whether the rehearsal passed from the runtime's own records of these calls (found by `context.rehearsal_request_id`), including who approved case 2's held request and the second factor recorded with that approval. That server-side check is what counts. A rehearsal never authorizes a protected step.",
     "",
     `[View workflow run](${meta.runUrl})`,
     ""
@@ -4944,18 +5004,16 @@ async function runRehearsalStep(apiKey, apiUrl) {
   if (!environment) {
     return failInput("`environment` is required and is not derived in rehearsal mode.");
   }
+  const rawMaxWait = getInput("max-wait-minutes") || "30";
+  const maxWaitMinutes = Number(rawMaxWait);
+  if (!Number.isInteger(maxWaitMinutes) || maxWaitMinutes < 1 || maxWaitMinutes > 50) {
+    return failInput(`\`max-wait-minutes\` must be a whole number from 1 to 50 in rehearsal mode (got "${rawMaxWait}").`);
+  }
   const artifactDigest = getInput("artifact-digest") || void 0;
   const gh = getGitHubContext();
-  const approvalsFrom = (getInput("approvals-from") || "pr-reviews").toLowerCase();
-  const approvalEvidence = approvalsFrom === "pr-reviews" ? await resolveApprovals({
-    repository: gh.repository,
-    sha: gh.sha,
-    prNumber: gh.pr_number ?? null,
-    token: process.env["GITHUB_TOKEN"],
-    apiBase: process.env["GITHUB_API_URL"],
-    log: info,
-    warn: warning
-  }) : null;
+  if (getInput("approvals-from")) {
+    info("AtlaSent rehearsal: approvals-from is ignored; case 3 is approved by a person in the AtlaSent console.");
+  }
   info(
     `AtlaSent rehearsal ${requestId}: running 5 authorization cases for "${actionType}" on target "${targetId}" in ${environment}.`
   );
@@ -4968,7 +5026,7 @@ async function runRehearsalStep(apiKey, apiUrl) {
       targetId,
       environment,
       artifactDigest,
-      approvalEvidence,
+      maxWaitMs: maxWaitMinutes * 6e4,
       github: gh
     },
     { mask: maskValue, log: info }

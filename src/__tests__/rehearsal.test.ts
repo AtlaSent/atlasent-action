@@ -36,6 +36,7 @@ import {
   evaluate,
   reverifyPermit,
   verifyPermit,
+  waitForApprovalResolution,
   EnforceError,
 } from "@atlasent/enforce";
 import type { Decision, EnforceConfig } from "@atlasent/enforce";
@@ -50,6 +51,7 @@ const mockVerifyPermit = verifyPermit as unknown as ReturnType<typeof vi.fn>;
 const mockReverifyPermit = reverifyPermit as unknown as ReturnType<typeof vi.fn>;
 const mockResolveApprovals = resolveApprovals as unknown as ReturnType<typeof vi.fn>;
 const mockMint = mintGithubActionsActorIdentity as unknown as ReturnType<typeof vi.fn>;
+const mockWait = waitForApprovalResolution as unknown as ReturnType<typeof vi.fn>;
 
 const REQUEST_ID = "3f2c9a1e-7b4d-4c8e-9a6f-0d1e2b3c4d5e";
 const ACTOR = "github-actions:repo:123:workflow:rehearse";
@@ -73,10 +75,14 @@ let consoleSpy: { mock: { calls: Array<Array<unknown>> } };
 // ── A small stateful stand-in for the runtime ───────────────────────────────
 //
 // Refuses an actor_identity it has already seen (the broker/runtime refuse a
-// replayed credential), denies a missing identity ACTOR_UNVERIFIED, denies
-// fewer than one approval INSUFFICIENT_APPROVALS, binds each permit to the
-// target it was evaluated for, and consumes a permit on its first successful
-// verify. Per-case overrides replace the evaluate answer for one case.
+// replayed credential) and denies a missing identity ACTOR_UNVERIFIED. With a
+// verified actor it HOLDS for approval: the action class requires a person's
+// approval and never reads a caller-asserted count. The approval wait stands
+// in for the person approving in the console: it builds the claim body with
+// the action's own builder (so the claim's identity is minted like the real
+// one) and returns the claimed permit. Each permit is bound to its target,
+// a target mismatch consumes nothing, and the first successful verify
+// consumes the permit.
 
 type EvalOverride = (config: EnforceConfig, evaluationId: string) => Decision;
 
@@ -87,11 +93,16 @@ interface FakeRuntime {
   evalCalls: number;
   verifyCalls: number;
   evalOverrides: Partial<Record<string, EvalOverride>>;
+  claimBodies: Array<Record<string, unknown>>;
 }
 
 let rt: FakeRuntime;
 let mintCount: number;
 let mintedAssertions: Array<Record<string, unknown>>;
+
+const CLAIMED_PERMIT = "pt-secret-claimed";
+const CLAIMED_HASH = "eh-claimed";
+const REEVALUATION_ID = "ev-reevaluation";
 
 function refusal(decision: Decision, code: string): EnforceError {
   return new EnforceError(
@@ -102,9 +113,45 @@ function refusal(decision: Decision, code: string): EnforceError {
   );
 }
 
-function jtiOf(config: EnforceConfig): string | undefined {
-  const j = (config.actorIdentity as Record<string, unknown> | undefined)?.["jti"];
+function jtiOf(config: EnforceConfig | Record<string, unknown>): string | undefined {
+  const c = config as Record<string, unknown>;
+  const identity = (c["actorIdentity"] ?? c["actor_identity"]) as Record<string, unknown> | undefined;
+  const j = identity?.["jti"];
   return typeof j === "string" ? j : undefined;
+}
+
+type WaitConfig = {
+  approvalId: string;
+  maxWaitMs: number;
+  buildClaimBody?: (row: { status: string; claimEnvironment?: string }) => Promise<Record<string, unknown>>;
+};
+
+/** The person approved and the claim succeeded: what the real wait returns. */
+async function approveAndClaim(config: WaitConfig) {
+  let body: Record<string, unknown>;
+  try {
+    body = await config.buildClaimBody!({ status: "approved_awaiting_claim", claimEnvironment: ENVIRONMENT });
+  } catch (err) {
+    // The real waitForApprovalResolution wraps an unbuildable body like this.
+    throw new EnforceError(
+      `Approval claim refused before sending: could not build the claim body (${err instanceof Error ? err.message : String(err)}) — failing closed`,
+      "evaluate",
+    );
+  }
+  rt.claimBodies.push(body);
+  const jti = jtiOf(body);
+  if (!jti || rt.seenAssertions.has(jti)) {
+    return { status: "approved_awaiting_claim", claimFailure: "HTTP 403" };
+  }
+  rt.seenAssertions.add(jti);
+  rt.permits.set(CLAIMED_PERMIT, { target: TARGET, hash: CLAIMED_HASH });
+  return {
+    status: "approved_awaiting_claim",
+    reEvaluationDecision: "allow",
+    permitToken: CLAIMED_PERMIT,
+    executionHashExpected: CLAIMED_HASH,
+    reEvaluationId: REEVALUATION_ID,
+  };
 }
 
 function installFakeRuntime(): void {
@@ -115,6 +162,7 @@ function installFakeRuntime(): void {
     evalCalls: 0,
     verifyCalls: 0,
     evalOverrides: {},
+    claimBodies: [],
   };
 
   mockEvaluate.mockImplementation(async (config: EnforceConfig): Promise<Decision> => {
@@ -132,21 +180,10 @@ function installFakeRuntime(): void {
     if (!config.changePlan?.revision) {
       return { decision: "deny", denyCode: "MISSING_BINDING", evaluationId };
     }
-    const approvals = Number(config.context?.["approvals"] ?? 0);
-    if (!(approvals >= 1)) {
-      return { decision: "deny", denyCode: "INSUFFICIENT_APPROVALS", evaluationId };
-    }
-    const permitToken = `pt-secret-${rt.evalCalls}`;
-    const executionHashExpected = `eh-${rt.evalCalls}`;
-    rt.permits.set(permitToken, { target: config.targetId as string, hash: executionHashExpected });
-    return {
-      decision: "allow",
-      permitToken,
-      executionHashExpected,
-      proofHash: `proof-secret-${rt.evalCalls}`,
-      evaluationId,
-    };
+    return { decision: "escalate", approvalRequestId: `apr-${rt.evalCalls}`, evaluationId };
   });
+
+  mockWait.mockImplementation(approveAndClaim);
 
   mockVerifyPermit.mockImplementation(async (config: EnforceConfig, decision: Decision) => {
     rt.verifyCalls++;
@@ -215,6 +252,7 @@ beforeEach(() => {
   mockReverifyPermit.mockReset();
   mockResolveApprovals.mockReset();
   mockMint.mockReset();
+  mockWait.mockReset();
 
   installFakeRuntime();
   mintCount = 0;
@@ -285,6 +323,9 @@ interface CaseOut {
   decision: string | null;
   deny_code: string | null;
   request_id: string | null;
+  approval_request_id?: string;
+  approval_status?: string;
+  claim_failure?: string;
   verify_outcome?: string;
   verify_error_code?: string;
   control_verify_outcome?: string;
@@ -306,6 +347,19 @@ function verifyConfigs(): EnforceConfig[] {
   return mockVerifyPermit.mock.calls.map((c) => c[0] as EnforceConfig);
 }
 
+function verifyCalls(): Array<{ config: EnforceConfig; decision: Decision }> {
+  return mockVerifyPermit.mock.calls.map((c) => ({ config: c[0] as EnforceConfig, decision: c[1] as Decision }));
+}
+
+/** Replace the n-th (1-based) verify call's answer; every other call keeps the fake runtime's. */
+function onVerifyCall(n: number, answer: (cfg: EnforceConfig, decision: Decision) => Promise<unknown>): void {
+  const defaultVerify = mockVerifyPermit.getMockImplementation()!;
+  mockVerifyPermit.mockImplementation(async (cfg: EnforceConfig, decision: Decision) => {
+    if (mockVerifyPermit.mock.calls.length === n) return answer(cfg, decision);
+    return defaultVerify(cfg, decision);
+  });
+}
+
 async function runExpectingFailure(): Promise<void> {
   await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
   expect(exitCalls()).toContain(1);
@@ -318,6 +372,7 @@ function expectNoNetworkCall(): void {
   expect(mockEnforce).not.toHaveBeenCalled();
   expect(mockMint).not.toHaveBeenCalled();
   expect(mockResolveApprovals).not.toHaveBeenCalled();
+  expect(mockWait).not.toHaveBeenCalled();
 }
 
 // ---------------------------------------------------------------------------
@@ -338,38 +393,47 @@ describe("rehearsal mode: happy path", () => {
     for (const id of REHEARSAL_CASE_IDS) expect(c[id].status, id).toBe("expected");
 
     expect(c["unauthorized_denied"]).toMatchObject({ decision: "deny", deny_code: "ACTOR_UNVERIFIED", request_id: "ev-1" });
-    expect(c["missing_approval_denied_or_held"]).toMatchObject({ decision: "deny", deny_code: "INSUFFICIENT_APPROVALS", request_id: "ev-2" });
-    expect(c["authorized_action_succeeds"]).toMatchObject({ decision: "allow", request_id: "ev-3", verify_outcome: "allow" });
+    expect(c["missing_approval_denied_or_held"]).toMatchObject({
+      decision: "escalate",
+      deny_code: null,
+      request_id: "ev-2",
+      approval_request_id: "apr-2",
+    });
+    expect(c["authorized_action_succeeds"]).toMatchObject({
+      decision: "allow",
+      request_id: REEVALUATION_ID,
+      approval_request_id: "apr-2",
+      approval_status: "approved_awaiting_claim",
+      verify_outcome: "allow",
+    });
     expect(c["changed_or_replayed_denied"]).toMatchObject({
       decision: null,
-      request_id: "ev-3",
+      request_id: REEVALUATION_ID,
       verify_error_code: "PERMIT_ALREADY_USED",
     });
     expect(c["changed_target_denied"]).toMatchObject({
       decision: "allow",
-      request_id: "ev-4",
+      request_id: REEVALUATION_ID,
       verify_error_code: "PERMIT_BINDING_MISMATCH",
       control_verify_outcome: "allow",
     });
   });
 
-  it("marks every evaluate with the rehearsal request id and its own case id, applied over everything else", async () => {
+  it("evaluates only cases 1 and 2, each marked with the request id and its case, and never asserts an approval", async () => {
+    setInput("approvals-from", "pr-reviews");
     await run();
 
     const configs = evalConfigs();
-    expect(configs).toHaveLength(4);
     expect(configs.map((cfg) => cfg.context?.["rehearsal_case"])).toEqual([
       "unauthorized_denied",
       "missing_approval_denied_or_held",
-      "authorized_action_succeeds",
-      "changed_target_denied",
     ]);
     for (const cfg of configs) {
       expect(cfg.context?.["rehearsal_request_id"]).toBe(REQUEST_ID);
       expect(cfg.action).toBe("production.deploy");
       expect(cfg.targetId).toBe(TARGET);
       expect(cfg.environment).toBe(ENVIRONMENT);
-      // The same broker-derived change_plan on every evaluate, case 1 included.
+      // The same broker-derived change_plan on both, case 1 included.
       expect(cfg.changePlan).toEqual({ operation: "deploy", revision: REVISION });
       expect(cfg.state_snapshot).toEqual({ source: "github-actions", complete: true, run_id: "900" });
       expect(cfg.context).toMatchObject({
@@ -377,11 +441,38 @@ describe("rehearsal mode: happy path", () => {
         repository: "acme/app",
         sha: REVISION,
         triggering_actor: "github:dispatcher",
-        pr_number: 7,
+        pr_number: null,
+        approvals: 0,
       });
+      expect(cfg.context).not.toHaveProperty("approving_reviewers");
       // Never a caller-supplied raw payload hash for a mandatory action.
       expect(cfg.executionPayloadHash).toBeUndefined();
     }
+    // No approval is derived from PR reviews, whatever approvals-from says.
+    expect(mockResolveApprovals).not.toHaveBeenCalled();
+    expect(logs().some((l) => l.includes("approvals-from is ignored"))).toBe(true);
+  });
+
+  it("waits on case 2's own approval request and claims with a fresh identity and the same change plan", async () => {
+    await run();
+
+    expect(mockWait).toHaveBeenCalledTimes(1);
+    const waitConfig = mockWait.mock.calls[0][0] as WaitConfig;
+    expect(waitConfig).toMatchObject({ approvalId: "apr-2", maxWaitMs: 30 * 60_000 });
+    expect(rt.claimBodies).toHaveLength(1);
+    // Mint order: case 2 evaluate, the claim, then the three verifies.
+    expect(rt.claimBodies[0]).toEqual({
+      actor_identity: mintedAssertions[1],
+      change_plan: { operation: "deploy", revision: REVISION },
+    });
+    // The approver is told exactly which request to approve.
+    expect(logs().some((l) => l.includes("approval request apr-2") && l.includes("Approve that request only"))).toBe(true);
+  });
+
+  it("max-wait-minutes bounds the wait", async () => {
+    setInput("max-wait-minutes", "10");
+    await run();
+    expect((mockWait.mock.calls[0][0] as WaitConfig).maxWaitMs).toBe(10 * 60_000);
   });
 
   it("case 1 presents no actor_identity; every other call presents a freshly minted one", async () => {
@@ -392,72 +483,47 @@ describe("rehearsal mode: happy path", () => {
     expect(evals[0].actorIdentity).toBeUndefined();
     expect(evals[0].actor).toBe("rehearsal:unverified-actor");
 
-    // 3 evaluates (cases 2, 3, 5) + 4 verifies (case 3, case 4, case 5 x2).
-    expect(verifies).toHaveLength(4);
-    expect(mockMint).toHaveBeenCalledTimes(7);
+    // 1 evaluate (case 2) + 1 claim + 3 verifies (case 5, case 3, case 4).
+    expect(verifies).toHaveLength(3);
+    expect(mockMint).toHaveBeenCalledTimes(5);
     for (const call of mockMint.mock.calls) {
       expect(call[0]).toMatchObject({ actionType: "production.deploy", environment: ENVIRONMENT });
     }
 
-    const presented = [...evals.slice(1), ...verifies].map((cfg) => cfg.actorIdentity);
+    const presented = [evals[1].actorIdentity, rt.claimBodies[0]["actor_identity"], ...verifies.map((v) => v.actorIdentity)];
     // Each one is a minted assertion, and no assertion is presented twice.
     for (const a of presented) expect(mintedAssertions).toContain(a);
-    expect(new Set(presented).size).toBe(7);
-    for (const cfg of [...evals.slice(1), ...verifies]) expect(cfg.actor).toBe(ACTOR);
+    expect(new Set(presented).size).toBe(5);
+    for (const cfg of [evals[1], ...verifies]) expect(cfg.actor).toBe(ACTOR);
   });
 
-  it("case 2 sends approvals 0; cases 1, 3 and 5 send the PR-review-derived approvals", async () => {
+  it("presents the claimed permit for a changed target first, then its own, then again", async () => {
     await run();
 
-    const [c1, c2, c3, c5] = evalConfigs();
-    expect(c2.context?.["approvals"]).toBe(0);
-    expect(c2.context).not.toHaveProperty("approving_reviewers");
-    for (const cfg of [c1, c3, c5]) {
-      expect(cfg.context?.["approvals"]).toBe(2);
-      expect(cfg.context?.["approving_reviewers"]).toEqual(["alice", "bob"]);
-    }
-    expect(mockResolveApprovals).toHaveBeenCalledTimes(1);
-  });
-
-  it("verifies with all bindings; case 5 presents the changed target and then its own", async () => {
-    await run();
-
-    const verifies = mockVerifyPermit.mock.calls.map((c) => ({ config: c[0] as EnforceConfig, decision: c[1] as Decision }));
-    expect(verifies.map((v) => v.config.targetId)).toEqual([
-      TARGET,
-      TARGET,
-      `${TARGET}--rehearsal-changed`,
-      TARGET,
-    ]);
-    // Case 3 and case 4 present permit 1; case 5's two verifies present permit 2.
-    expect(verifies.map((v) => v.decision.permitToken)).toEqual([
-      "pt-secret-3",
-      "pt-secret-3",
-      "pt-secret-4",
-      "pt-secret-4",
-    ]);
+    const verifies = verifyCalls();
+    expect(verifies.map((v) => v.config.targetId)).toEqual([`${TARGET}--rehearsal-changed`, TARGET, TARGET]);
     for (const v of verifies) {
+      // Always the claimed permit and its execution hash, never anything from the hold.
+      expect(v.decision.permitToken).toBe(CLAIMED_PERMIT);
+      expect(v.decision.executionHashExpected).toBe(CLAIMED_HASH);
       expect(v.config.environment).toBe(ENVIRONMENT);
       expect(v.config.requiredBindings).toEqual(["environment", "target_id", "payload_hash"]);
-      expect(v.decision.executionHashExpected).toMatch(/^eh-/);
     }
   });
 
-  it("never puts a permit token or proof hash in an output, the summary, or a non-mask log line", async () => {
+  it("never puts the claimed permit token in an output, the summary, or a non-mask log line", async () => {
     await run();
 
-    const secrets = ["pt-secret-3", "pt-secret-4", "proof-secret-3", "proof-secret-4"];
     const outputs = fs.readFileSync(outputFile, "utf-8");
     const summary = readSummary();
     expect(summary).toContain("informational");
     expect(summary).toContain(REQUEST_ID);
-    for (const s of secrets) {
-      expect(outputs).not.toContain(s);
-      expect(summary).not.toContain(s);
-      expect(logs()).toContain(`::add-mask::${s}`);
-      for (const line of logs()) {
-        if (line.includes(s)) expect(line).toBe(`::add-mask::${s}`);
-      }
+    expect(summary).toContain("apr-2");
+    expect(outputs).not.toContain(CLAIMED_PERMIT);
+    expect(summary).not.toContain(CLAIMED_PERMIT);
+    expect(logs()).toContain(`::add-mask::${CLAIMED_PERMIT}`);
+    for (const line of logs()) {
+      if (line.includes(CLAIMED_PERMIT)) expect(line).toBe(`::add-mask::${CLAIMED_PERMIT}`);
     }
   });
 
@@ -475,18 +541,16 @@ describe("rehearsal mode: happy path", () => {
     }
   });
 
-  it("with approvals-from none, sends no derived approvals (case 2 still sends 0)", async () => {
-    setInput("approvals-from", "none");
-    rt.evalOverrides["authorized_action_succeeds"] = (cfg, id) => {
-      expect(cfg.context).not.toHaveProperty("approvals");
-      return { decision: "deny", denyCode: "INSUFFICIENT_APPROVALS", evaluationId: id };
+  it.each(["hold", "escalate"] as const)("case 2 %s with an approval request is approvable", async (decision) => {
+    rt.evalOverrides["missing_approval_denied_or_held"] = (cfg, id) => {
+      rt.seenAssertions.add(jtiOf(cfg)!);
+      return { decision, approvalRequestId: "apr-x", evaluationId: id };
     };
-    await runExpectingFailure();
+    await run();
 
-    expect(mockResolveApprovals).not.toHaveBeenCalled();
-    expect(evalConfigs()[1].context?.["approvals"]).toBe(0);
-    expect(evalConfigs()[0].context).not.toHaveProperty("approvals");
-    expect(cases()["authorized_action_succeeds"].status).toBe("unexpected");
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(cases()["missing_approval_denied_or_held"]).toMatchObject({ status: "expected", decision });
+    expect((mockWait.mock.calls[0][0] as WaitConfig).approvalId).toBe("apr-x");
   });
 
   it("takes precedence over the single-eval path", async () => {
@@ -517,7 +581,7 @@ describe("rehearsal mode: a case with the wrong outcome fails the step", () => {
     expect(cases()["unauthorized_denied"]).toMatchObject({ status: "unexpected", deny_code: "NO_POLICY" });
   });
 
-  it("case 2 allowed with zero approvals → unexpected", async () => {
+  it("case 2 allowed without an approval → unexpected; nothing is waited on or verified", async () => {
     rt.evalOverrides["missing_approval_denied_or_held"] = (_cfg, id) => ({
       decision: "allow",
       permitToken: "pt-secret-c2",
@@ -525,7 +589,35 @@ describe("rehearsal mode: a case with the wrong outcome fails the step", () => {
       evaluationId: id,
     });
     await runExpectingFailure();
+    const c = cases();
+    expect(c["missing_approval_denied_or_held"].status).toBe("unexpected");
+    expect(c["authorized_action_succeeds"]).toMatchObject({ status: "unexpected", approval_status: "no_approval_request" });
+    expect(c["changed_or_replayed_denied"].status).toBe("not_run");
+    expect(c["changed_target_denied"].status).toBe("not_run");
+    expect(mockWait).not.toHaveBeenCalled();
+    expect(mockVerifyPermit).not.toHaveBeenCalled();
+  });
+
+  it("case 2 denied INSUFFICIENT_APPROVALS refuses, but leaves case 3 nothing to approve", async () => {
+    rt.evalOverrides["missing_approval_denied_or_held"] = (_cfg, id) => ({
+      decision: "deny",
+      denyCode: "INSUFFICIENT_APPROVALS",
+      evaluationId: id,
+    });
+    await runExpectingFailure();
+    const c = cases();
+    expect(c["missing_approval_denied_or_held"].status).toBe("expected");
+    expect(c["authorized_action_succeeds"]).toMatchObject({ status: "unexpected", approval_status: "no_approval_request" });
+    expect(c["changed_or_replayed_denied"].status).toBe("not_run");
+    expect(c["changed_target_denied"].status).toBe("not_run");
+    expect(mockWait).not.toHaveBeenCalled();
+  });
+
+  it("case 2 held with no approval request → unexpected, nothing is waited on", async () => {
+    rt.evalOverrides["missing_approval_denied_or_held"] = (_cfg, id) => ({ decision: "escalate", evaluationId: id });
+    await runExpectingFailure();
     expect(cases()["missing_approval_denied_or_held"].status).toBe("unexpected");
+    expect(mockWait).not.toHaveBeenCalled();
   });
 
   it("case 2 denied for another reason → unexpected", async () => {
@@ -534,114 +626,134 @@ describe("rehearsal mode: a case with the wrong outcome fails the step", () => {
     expect(cases()["missing_approval_denied_or_held"].status).toBe("unexpected");
   });
 
-  it.each(["hold", "escalate"] as const)("case 2 %s is expected and is not waited on", async (decision) => {
-    rt.evalOverrides["missing_approval_denied_or_held"] = (_cfg, id) => ({
-      decision,
-      approvalRequestId: "apr-1",
-      evaluationId: id,
-    });
-    await run();
-
-    expect(exitSpy).not.toHaveBeenCalled();
-    expect(cases()["missing_approval_denied_or_held"]).toMatchObject({ status: "expected", decision });
-    expect(readOutputs()["rehearsal-verdict"]).toBe("all_expected");
-  });
-
-  it("case 3 hold → unexpected, and cases 4 and 5 are not run", async () => {
-    rt.evalOverrides["authorized_action_succeeds"] = (_cfg, id) => ({ decision: "hold", approvalRequestId: "apr-3", evaluationId: id });
+  it.each(["denied", "expired", "revoked"])("the approval resolves %s → case 3 unexpected, nothing verified", async (status) => {
+    mockWait.mockImplementation(async () => ({ status }));
     await runExpectingFailure();
-
     const c = cases();
-    expect(c["authorized_action_succeeds"]).toMatchObject({ status: "unexpected", decision: "hold" });
+    expect(c["authorized_action_succeeds"]).toMatchObject({
+      status: "unexpected",
+      approval_request_id: "apr-2",
+      approval_status: status,
+    });
     expect(c["changed_or_replayed_denied"].status).toBe("not_run");
     expect(c["changed_target_denied"].status).toBe("not_run");
-    expect(mockEvaluate).toHaveBeenCalledTimes(3);
     expect(mockVerifyPermit).not.toHaveBeenCalled();
   });
 
-  it("case 3 denied → cases 4 and 5 not run", async () => {
-    rt.evalOverrides["authorized_action_succeeds"] = (_cfg, id) => ({ decision: "deny", denyCode: "INSUFFICIENT_APPROVALS", evaluationId: id });
+  it("an approved request whose claim is refused → case 3 unexpected with the claim failure", async () => {
+    mockWait.mockImplementation(async () => ({ status: "approved_awaiting_claim", claimFailure: "change_plan_mismatch" }));
     await runExpectingFailure();
+    expect(cases()["authorized_action_succeeds"]).toMatchObject({
+      status: "unexpected",
+      approval_status: "approved_awaiting_claim",
+      claim_failure: "change_plan_mismatch",
+    });
+    expect(mockVerifyPermit).not.toHaveBeenCalled();
+  });
 
+  it("a claimed permit with no execution hash → unexpected, masked, never verified", async () => {
+    mockWait.mockImplementation(async () => ({
+      status: "approved_awaiting_claim",
+      permitToken: "pt-secret-nohash",
+      reEvaluationId: REEVALUATION_ID,
+    }));
+    await runExpectingFailure();
+    expect(cases()["authorized_action_succeeds"]).toMatchObject({ status: "unexpected", claim_failure: "no_execution_hash" });
+    expect(mockVerifyPermit).not.toHaveBeenCalled();
+    expect(logs()).toContain("::add-mask::pt-secret-nohash");
+    expect(fs.readFileSync(outputFile, "utf-8")).not.toContain("pt-secret-nohash");
+  });
+
+  it("nobody approves within max-wait-minutes → case 3 unexpected (timed_out), not a stopped run", async () => {
+    const realNow = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(realNow);
+    mockWait.mockImplementation(async (cfg: WaitConfig) => {
+      clock.mockReturnValue(realNow + cfg.maxWaitMs + 1);
+      throw new EnforceError("Approval wait timed out after 1800000ms with no human resolution — failing closed", "evaluate");
+    });
+    await runExpectingFailure();
     const c = cases();
+    expect(c["authorized_action_succeeds"]).toMatchObject({ status: "unexpected", approval_status: "timed_out" });
+    expect(c["changed_or_replayed_denied"].status).toBe("not_run");
+    expect(c["changed_target_denied"].status).toBe("not_run");
+    expect(logs().some((l) => l.includes("stopped (fail-closed)"))).toBe(false);
+  });
+
+  it("an approval poll failure before the deadline stops the run", async () => {
+    mockWait.mockImplementation(async () => {
+      throw new EnforceError("Approval status poll: authentication failed (HTTP 403)", "evaluate");
+    });
+    await runExpectingFailure();
+    const c = cases();
+    expect(c["missing_approval_denied_or_held"].status).toBe("expected");
+    expect(c["authorized_action_succeeds"].status).toBe("not_run");
+    expect(logs().some((l) => l.includes("stopped (fail-closed)") && l.includes("authentication failed"))).toBe(true);
+  });
+
+  it("an approval that must be claimed in another environment is never claimed", async () => {
+    mockWait.mockImplementation(async (cfg: WaitConfig) => {
+      try {
+        await cfg.buildClaimBody!({ status: "approved_awaiting_claim", claimEnvironment: "staging" });
+      } catch (err) {
+        throw new EnforceError(`Approval claim refused before sending: ${(err as Error).message}`, "evaluate");
+      }
+      throw new Error("the claim body must not be built");
+    });
+    await runExpectingFailure();
+    expect(logs().some((l) => l.includes('claimed for environment "staging"'))).toBe(true);
+    expect(cases()["authorized_action_succeeds"].status).toBe("not_run");
+    expect(mockVerifyPermit).not.toHaveBeenCalled();
+  });
+
+  it("case 5: the runtime accepts a changed target → case 5 and case 3 unexpected, nothing more is verified", async () => {
+    onVerifyCall(1, async () => ({ verified: true, outcome: "allow" }));
+    await runExpectingFailure();
+    const c = cases();
+    expect(c["changed_target_denied"]).toMatchObject({ status: "unexpected", verify_outcome: "allow" });
+    expect(c["changed_target_denied"].control_verify_outcome).toBeUndefined();
     expect(c["authorized_action_succeeds"].status).toBe("unexpected");
     expect(c["changed_or_replayed_denied"].status).toBe("not_run");
-    expect(c["changed_target_denied"].status).toBe("not_run");
-    expect(readOutputs()["rehearsal-verdict"]).toBe("unexpected");
+    expect(mockVerifyPermit).toHaveBeenCalledTimes(1);
   });
 
-  it("case 3 allow without an execution hash → unexpected, never verified", async () => {
-    rt.evalOverrides["authorized_action_succeeds"] = (_cfg, id) => ({ decision: "allow", permitToken: "pt-secret-nohash", evaluationId: id });
-    await runExpectingFailure();
-    expect(cases()["authorized_action_succeeds"].status).toBe("unexpected");
-    expect(mockVerifyPermit).not.toHaveBeenCalled();
-  });
-
-  it("case 3 verify refused → case 3 unexpected, case 4 not run, case 5 still runs", async () => {
-    const defaultVerify = mockVerifyPermit.getMockImplementation()!;
-    mockVerifyPermit.mockImplementation(async (cfg: EnforceConfig, decision: Decision) => {
-      if (mockVerifyPermit.mock.calls.length === 1) throw refusal(decision, "PAYLOAD_MISMATCH");
-      return defaultVerify(cfg, decision);
+  it("case 5: the changed target refused for another reason → case 5 unexpected, case 3 still verifies", async () => {
+    onVerifyCall(1, async (_cfg, decision) => {
+      throw refusal(decision, "PERMIT_EXPIRED");
     });
     await runExpectingFailure();
+    const c = cases();
+    expect(c["changed_target_denied"]).toMatchObject({ status: "unexpected", verify_error_code: "PERMIT_EXPIRED" });
+    expect(c["authorized_action_succeeds"].status).toBe("expected");
+    expect(c["changed_or_replayed_denied"].status).toBe("expected");
+  });
 
+  it("case 3's own verify refused → case 3 and case 5 unexpected, case 4 not run", async () => {
+    onVerifyCall(2, async (_cfg, decision) => {
+      throw refusal(decision, "PAYLOAD_MISMATCH");
+    });
+    await runExpectingFailure();
     const c = cases();
     expect(c["authorized_action_succeeds"]).toMatchObject({ status: "unexpected", verify_error_code: "PAYLOAD_MISMATCH" });
+    expect(c["changed_target_denied"]).toMatchObject({
+      status: "unexpected",
+      verify_error_code: "PERMIT_BINDING_MISMATCH",
+      control_verify_error_code: "PAYLOAD_MISMATCH",
+    });
     expect(c["changed_or_replayed_denied"].status).toBe("not_run");
-    expect(c["changed_target_denied"].status).toBe("expected");
   });
 
   it("case 4: the runtime accepts a replayed permit → unexpected", async () => {
-    const defaultVerify = mockVerifyPermit.getMockImplementation()!;
-    mockVerifyPermit.mockImplementation(async (cfg: EnforceConfig, decision: Decision) => {
-      if (mockVerifyPermit.mock.calls.length === 2) return { verified: true, outcome: "allow" };
-      return defaultVerify(cfg, decision);
-    });
+    onVerifyCall(3, async () => ({ verified: true, outcome: "allow" }));
     await runExpectingFailure();
     expect(cases()["changed_or_replayed_denied"]).toMatchObject({ status: "unexpected", verify_outcome: "allow" });
   });
 
   it("case 4: refused for a reason other than PERMIT_ALREADY_USED → unexpected", async () => {
-    const defaultVerify = mockVerifyPermit.getMockImplementation()!;
-    mockVerifyPermit.mockImplementation(async (cfg: EnforceConfig, decision: Decision) => {
-      if (mockVerifyPermit.mock.calls.length === 2) throw refusal(decision, "PERMIT_EXPIRED");
-      return defaultVerify(cfg, decision);
+    onVerifyCall(3, async (_cfg, decision) => {
+      throw refusal(decision, "PERMIT_EXPIRED");
     });
     await runExpectingFailure();
     expect(cases()["changed_or_replayed_denied"]).toMatchObject({ status: "unexpected", verify_error_code: "PERMIT_EXPIRED" });
-  });
-
-  it("case 5: the runtime accepts a changed target → unexpected, and no control verify is attempted", async () => {
-    const defaultVerify = mockVerifyPermit.getMockImplementation()!;
-    mockVerifyPermit.mockImplementation(async (cfg: EnforceConfig, decision: Decision) => {
-      if (cfg.targetId === `${TARGET}--rehearsal-changed`) return { verified: true, outcome: "allow" };
-      return defaultVerify(cfg, decision);
-    });
-    await runExpectingFailure();
-    expect(cases()["changed_target_denied"]).toMatchObject({ status: "unexpected", verify_outcome: "allow" });
-    expect(cases()["changed_target_denied"].control_verify_outcome).toBeUndefined();
-    expect(mockVerifyPermit).toHaveBeenCalledTimes(3);
-  });
-
-  it("case 5: the own-target control verify is refused → unexpected", async () => {
-    const defaultVerify = mockVerifyPermit.getMockImplementation()!;
-    mockVerifyPermit.mockImplementation(async (cfg: EnforceConfig, decision: Decision) => {
-      if (mockVerifyPermit.mock.calls.length === 4) throw refusal(decision, "PERMIT_EXPIRED");
-      return defaultVerify(cfg, decision);
-    });
-    await runExpectingFailure();
-    expect(cases()["changed_target_denied"]).toMatchObject({
-      status: "unexpected",
-      verify_error_code: "PERMIT_BINDING_MISMATCH",
-      control_verify_error_code: "PERMIT_EXPIRED",
-    });
-  });
-
-  it("case 5: evaluate not allowed → not run, and the step fails", async () => {
-    rt.evalOverrides["changed_target_denied"] = (_cfg, id) => ({ decision: "deny", denyCode: "RATE_LIMITED", evaluationId: id });
-    await runExpectingFailure();
-    expect(cases()["changed_target_denied"]).toMatchObject({ status: "not_run", decision: "deny", deny_code: "RATE_LIMITED" });
-    expect(readOutputs()["rehearsal-verdict"]).toBe("unexpected");
   });
 });
 
@@ -689,6 +801,13 @@ describe("rehearsal mode: invalid inputs fail before any network call", () => {
     expect(logs().some((l) => l.includes("`environment` is required"))).toBe(true);
   });
 
+  it.each(["0", "51", "2.5", "ten"])("max-wait-minutes %s", async (value) => {
+    setInput("max-wait-minutes", value);
+    await runExpectingFailure();
+    expectNoNetworkCall();
+    expect(logs().some((l) => l.includes("`max-wait-minutes` must be a whole number"))).toBe(true);
+  });
+
   it("missing ATLASENT_API_KEY", async () => {
     delete process.env["ATLASENT_API_KEY"];
     await runExpectingFailure();
@@ -709,24 +828,24 @@ describe("rehearsal mode: errors stop the run and fail the step", () => {
     expect(logs().some((l) => l.includes("workload identity mint failed") && l.includes("id-token: write"))).toBe(true);
   });
 
-  it("a later mint failure (case 4 verify) → remaining cases not run, step fails", async () => {
+  it("a later mint failure (case 5 verify) → remaining cases not run, step fails", async () => {
     const defaultMint = mockMint.getMockImplementation()!;
-    // Mint order: case 2 evaluate, case 3 evaluate, case 3 verify, then the
-    // fourth mint is case 4's verify.
+    // Mint order: case 2 evaluate, the claim, then the third mint is case 5's verify.
     mockMint.mockImplementation(async (...a: unknown[]) => {
-      if (mintCount === 3) throw new WorkloadIdentityError("broker rejected this job (HTTP 403)");
+      if (mintCount === 2) throw new WorkloadIdentityError("broker rejected this job (HTTP 403)");
       return defaultMint(...a);
     });
     await runExpectingFailure();
 
     const c = cases();
-    expect(c["authorized_action_succeeds"].status).toBe("expected");
-    expect(c["changed_or_replayed_denied"].status).toBe("not_run");
-    expect(c["changed_target_denied"].status).toBe("not_run");
+    expect(c["missing_approval_denied_or_held"].status).toBe("expected");
+    for (const id of ["authorized_action_succeeds", "changed_or_replayed_denied", "changed_target_denied"]) {
+      expect(c[id].status, id).toBe("not_run");
+    }
     expect(logs().some((l) => l.includes("stopped (fail-closed)"))).toBe(true);
   });
 
-  it("a minted identity naming a different actor → step fails", async () => {
+  it("a claim identity naming a different actor → never claimed, step fails", async () => {
     const defaultMint = mockMint.getMockImplementation()!;
     mockMint.mockImplementation(async (...a: unknown[]) => {
       if (mintCount === 1) {
@@ -737,6 +856,7 @@ describe("rehearsal mode: errors stop the run and fail the step", () => {
     });
     await runExpectingFailure();
     expect(logs().some((l) => l.includes("names actor"))).toBe(true);
+    expect(rt.claimBodies).toHaveLength(0);
     expect(readOutputs()["rehearsal-verdict"]).toBe("unexpected");
   });
 
@@ -761,12 +881,8 @@ describe("rehearsal mode: errors stop the run and fail the step", () => {
   });
 
   it("a verify transport failure is never read as the expected refusal", async () => {
-    const defaultVerify = mockVerifyPermit.getMockImplementation()!;
-    mockVerifyPermit.mockImplementation(async (cfg: EnforceConfig, decision: Decision) => {
-      if (mockVerifyPermit.mock.calls.length === 2) {
-        throw new EnforceError("verify-permit failed (HTTP 409)", "verify-permit", decision);
-      }
-      return defaultVerify(cfg, decision);
+    onVerifyCall(3, async (_cfg, decision) => {
+      throw new EnforceError("verify-permit failed (HTTP 409)", "verify-permit", decision);
     });
     await runExpectingFailure();
 
@@ -774,16 +890,21 @@ describe("rehearsal mode: errors stop the run and fail the step", () => {
     expect(logs().some((l) => l.includes("verify-permit failed (HTTP 409)"))).toBe(true);
   });
 
+  it("a changed-target transport failure is never read as the binding refusal", async () => {
+    onVerifyCall(1, async (_cfg, decision) => {
+      throw new EnforceError("verify-permit failed (HTTP 502)", "verify-permit", decision);
+    });
+    await runExpectingFailure();
+    expect(cases()["changed_target_denied"].status).toBe("not_run");
+    expect(cases()["authorized_action_succeeds"].status).toBe("not_run");
+  });
+
   it("a local MISSING_BINDING refusal is never read as the expected refusal", async () => {
-    const defaultVerify = mockVerifyPermit.getMockImplementation()!;
-    mockVerifyPermit.mockImplementation(async (cfg: EnforceConfig, decision: Decision) => {
-      if (mockVerifyPermit.mock.calls.length === 2) {
-        throw new EnforceError("verify-permit refused: required binding(s) absent: target_id", "verify-permit", decision, {
-          outcome: "invalid",
-          verifyErrorCode: "MISSING_BINDING",
-        });
-      }
-      return defaultVerify(cfg, decision);
+    onVerifyCall(3, async (_cfg, decision) => {
+      throw new EnforceError("verify-permit refused: required binding(s) absent: target_id", "verify-permit", decision, {
+        outcome: "invalid",
+        verifyErrorCode: "MISSING_BINDING",
+      });
     });
     await runExpectingFailure();
     expect(cases()["changed_or_replayed_denied"].status).toBe("not_run");
