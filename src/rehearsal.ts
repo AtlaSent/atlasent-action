@@ -459,8 +459,10 @@ async function runCases(
   }
   if (resolution.permitToken) deps.mask(resolution.permitToken);
 
+  const claimDecision = resolution.reEvaluationDecision ?? null;
   const claimed =
     (resolution.status === "approved" || resolution.status === "approved_awaiting_claim") &&
+    claimDecision === "allow" &&
     !!resolution.permitToken &&
     !!resolution.executionHashExpected;
   const approvalFields = {
@@ -474,7 +476,7 @@ async function runCases(
     record({
       case_id: "authorized_action_succeeds",
       status: "unexpected",
-      decision: resolution.reEvaluationDecision ?? null,
+      decision: claimDecision,
       deny_code: null,
       request_id: resolution.reEvaluationId ?? null,
       ...approvalFields,
@@ -489,14 +491,14 @@ async function runCases(
   // The claimed permit as a decision. Nothing from case 2's hold is reused
   // for verify: the token, execution hash and evaluation are the claim's.
   const d3: Decision = {
-    decision: "allow",
+    decision: claimDecision,
     permitToken: resolution.permitToken,
     executionHashExpected: resolution.executionHashExpected,
     evaluationId: resolution.reEvaluationId,
     approvalRequestId: approvalId,
   };
   const case3Fields = {
-    decision: "allow" as string | null,
+    decision: claimDecision as string | null,
     deny_code: null,
     request_id: resolution.reEvaluationId ?? null,
     ...approvalFields,
