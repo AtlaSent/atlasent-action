@@ -476,6 +476,16 @@ inputs:
   expected-permit-hash:
     description: 'establish-effect only, optional. The admit-operation step''s permit-hash output, cross-checked the same way.'
     required: false
+  rehearsal-request-id:
+    description: |
+      Set to the rehearsal id the AtlaSent console issued (a UUID) to run AUTHORIZATION REHEARSAL mode (atlasent-console#3377) instead of a gate. Runs five cases against the runtime for ONE protected action, each evaluate carrying context.rehearsal_request_id and context.rehearsal_case:
+        1. unauthorized_denied: evaluate with no actor_identity (actor_id rehearsal:unverified-actor); expects deny ACTOR_UNVERIFIED.
+        2. missing_approval_denied_or_held: verified actor, context.approvals 0; expects deny INSUFFICIENT_APPROVALS, or hold/escalate (never waited on).
+        3. authorized_action_succeeds: verified actor, approvals derived as on the single-eval path (approvals-from); expects allow, then a consuming verify.
+        4. changed_or_replayed_denied: the case-3 permit verified again; expects PERMIT_ALREADY_USED.
+        5. changed_target_denied: a fresh allow, verified for target-id + "--rehearsal-changed" (expects PERMIT_BINDING_MISMATCH), then for its own target (expects verified).
+      Requires action (production.deploy, infrastructure.change, production.rollback or secret.configuration.change), target-id and an explicit environment, plus `permissions: id-token: write`; a fresh workload actor_identity.v1 is minted for every evaluate and verify that presents one. API key scopes: evaluate:write, verify:execute, idp_broker:mint. The step fails on any invalid input, transport/HTTP error, identity mint failure, or case that is not as expected. Its verdict is informational: the console decides from the runtime's own records. A rehearsal authorizes nothing (verified is always "false").
+    required: false
 outputs:
   solo-attestation-id:
     description: 'UUID of the recorded solo_operator_attestations row. Set only by solo-operator-attest mode. Empty on failure (fail-closed — no partial attestation is ever recorded).'
@@ -494,7 +504,7 @@ outputs:
   risk-score:
     description: 'The numeric risk score from the Decision response. Empty string when the evaluator did not return a risk assessment. Single-eval path only.'
   verified:
-    description: '"true" when evaluate=allow AND verify-permit=true for ALL evaluations; "false" otherwise (fail-closed). Set on both single and batch paths, and in verify-permit (boundary) mode.'
+    description: '"true" when evaluate=allow AND verify-permit=true for ALL evaluations; "false" otherwise (fail-closed). Set on both single and batch paths, and in verify-permit (boundary) mode. Always "false" in rehearsal mode, which authorizes nothing.'
   waited-for-approval:
     description: '"true" when single-action wait-for-approval observed a hold or escalation and waited for its terminal decision. "false" when no approval wait was needed or enabled. Single-action path only.'
   permit-issued:
@@ -648,6 +658,12 @@ outputs:
     description: 'establish-effect only. verified | mismatch | failed | incomplete, derived from the runtime''s sealed GitHub observation (never from the workflow''s claim). "verified" requires the runtime to have established the effect AND its evidence to include the observed revision and a matching artifact-currentness record, and to name this run, a successful native deployment status, the deploy-environment, the operation-id, the expected head/base and every expected authorization id given.'
   deploy-readback:
     description: 'establish-effect only. JSON atlasent.deploy_readback.v1: the runtime-read run id, deployment id and status, observed head SHA and environment, plan base SHA, correlated with the evaluation, decision, permit hash, change brief and the operation the runtime names, plus the requested operation/attempt (labelled as requested), the verdict and its reason.'
+  rehearsal-request-id:
+    description: 'Rehearsal mode only. The validated rehearsal id (lowercase UUID) every case was sent with.'
+  rehearsal-cases:
+    description: 'Rehearsal mode only. JSON array, one entry per case in order: {case_id, status: "expected"|"unexpected"|"not_run", decision, deny_code, request_id, verify_outcome?, verify_error_code?, control_verify_outcome?, control_verify_error_code?}. request_id is the runtime evaluation the case created (case 4: the case-3 evaluation whose permit it re-presented). The control_verify_* fields are case 5''s own-target verify. Never contains a permit token.'
+  rehearsal-verdict:
+    description: 'Rehearsal mode only. "all_expected" when all five cases behaved as expected, else "unexpected". Informational: the AtlaSent console''s server-side check of the runtime''s records is what decides whether the rehearsal passed.'
 runs:
   using: 'node24'
   main: 'dist/index.js'

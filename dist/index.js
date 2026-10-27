@@ -179,12 +179,12 @@ var require_dist = __commonJS({
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.resolveFunctionRegion = exports2.parseFunctionRegion = exports2.functionRegionHeaders = exports2.HOSTED_RUNTIME_HOSTS = exports2.FunctionRegionConfigError = exports2.FUNCTION_REGION_HEADER = exports2.FUNCTION_REGION_ENV = exports2.DEFAULT_FUNCTION_REGION = exports2.CLOUD_LOCUS_CONTEXT_KEYS = exports2.EnforceError = void 0;
     exports2.isBlockedBeforeExecution = isBlockedBeforeExecution;
-    exports2.evaluate = evaluate2;
+    exports2.evaluate = evaluate3;
     exports2.denyReasonText = denyReasonText2;
     exports2.verify = verify2;
     exports2.waitForApprovalResolution = waitForApprovalResolution3;
-    exports2.requiredBindingsFor = requiredBindingsFor4;
-    exports2.verifyPermit = verifyPermit4;
+    exports2.requiredBindingsFor = requiredBindingsFor5;
+    exports2.verifyPermit = verifyPermit5;
     exports2.reverifyPermit = reverifyPermit2;
     exports2.enforce = enforce2;
     var transport_1 = require_transport();
@@ -198,9 +198,9 @@ var require_dist = __commonJS({
     }
     var blockedBeforeExecutionErrors = /* @__PURE__ */ new WeakSet();
     function isBlockedBeforeExecution(err) {
-      return err instanceof EnforceError2 && blockedBeforeExecutionErrors.has(err);
+      return err instanceof EnforceError3 && blockedBeforeExecutionErrors.has(err);
     }
-    var EnforceError2 = class extends Error {
+    var EnforceError3 = class extends Error {
       phase;
       decision;
       /** Coarse verify outcome (verified | mismatch | expired | replay_blocked | invalid | …). */
@@ -225,8 +225,8 @@ var require_dist = __commonJS({
         return blockedBeforeExecutionErrors.has(this);
       }
     };
-    exports2.EnforceError = EnforceError2;
-    async function evaluate2(config) {
+    exports2.EnforceError = EnforceError3;
+    async function evaluate3(config) {
       const apiUrl = (config.apiUrl ?? DEFAULT_API_URL).replace(/\/$/, "");
       const rawContext = { ...config.context };
       const contextSnapshot = rawContext["state_snapshot"];
@@ -282,25 +282,25 @@ var require_dist = __commonJS({
       try {
         ({ status, body } = await (0, transport_1.post)(`${apiUrl}/v1-evaluate`, JSON.stringify(payload), runtimeHeaders(config, apiUrl)));
       } catch (err) {
-        throw new EnforceError2(`AtlaSent API unreachable: ${err instanceof Error ? err.message : String(err)}`, "evaluate");
+        throw new EnforceError3(`AtlaSent API unreachable: ${err instanceof Error ? err.message : String(err)}`, "evaluate");
       }
       if (status >= 500) {
-        throw new EnforceError2(`Infrastructure failure (HTTP ${status})`, "evaluate");
+        throw new EnforceError3(`Infrastructure failure (HTTP ${status})`, "evaluate");
       }
       if (status === 401 || status === 403) {
-        throw new EnforceError2(`Authentication failed (HTTP ${status})`, "evaluate");
+        throw new EnforceError3(`Authentication failed (HTTP ${status})`, "evaluate");
       }
       if (status === 429) {
-        throw new EnforceError2("Rate limited (HTTP 429)", "evaluate");
+        throw new EnforceError3("Rate limited (HTTP 429)", "evaluate");
       }
       if (status < 200 || status >= 300) {
-        throw new EnforceError2(`Unexpected response (HTTP ${status})`, "evaluate");
+        throw new EnforceError3(`Unexpected response (HTTP ${status})`, "evaluate");
       }
       let raw;
       try {
         raw = JSON.parse(body);
       } catch {
-        throw new EnforceError2("Non-JSON response from AtlaSent API", "evaluate");
+        throw new EnforceError3("Non-JSON response from AtlaSent API", "evaluate");
       }
       const decision = mapDecision(raw);
       if (decision.decision === "deny" && decision.denyCode === "INSUFFICIENT_APPROVALS" && config.onInsufficientApprovals && raw["signing_hint"] != null && typeof raw["signing_hint"] === "object") {
@@ -312,7 +312,7 @@ var require_dist = __commonJS({
           quorum = void 0;
         }
         if (quorum) {
-          return evaluate2({ ...config, quorum, onInsufficientApprovals: void 0 });
+          return evaluate3({ ...config, quorum, onInsufficientApprovals: void 0 });
         }
       }
       return decision;
@@ -330,13 +330,13 @@ var require_dist = __commonJS({
         case "allow":
           return;
         case "deny":
-          throw new EnforceError2(`Denied: ${denyReasonText2(decision)}`, "verify", decision);
+          throw new EnforceError3(`Denied: ${denyReasonText2(decision)}`, "verify", decision);
         case "hold":
-          throw new EnforceError2(`On hold: ${decision.holdReason ?? "awaiting approval"}`, "verify", decision);
+          throw new EnforceError3(`On hold: ${decision.holdReason ?? "awaiting approval"}`, "verify", decision);
         case "escalate":
-          throw new EnforceError2("Escalated \u2014 manual review required", "verify", decision);
+          throw new EnforceError3("Escalated \u2014 manual review required", "verify", decision);
         default:
-          throw new EnforceError2(`Unknown decision: ${String(decision.decision)}`, "verify", decision);
+          throw new EnforceError3(`Unknown decision: ${String(decision.decision)}`, "verify", decision);
       }
     }
     var APPROVAL_POLL_INTERVAL_MS = 5e3;
@@ -352,7 +352,7 @@ var require_dist = __commonJS({
         try {
           built = await config.buildClaimBody(row);
         } catch (err) {
-          throw new EnforceError2(`Approval claim refused before sending: could not build the claim body (${err instanceof Error ? err.message : String(err)}) \u2014 failing closed`, "evaluate");
+          throw new EnforceError3(`Approval claim refused before sending: could not build the claim body (${err instanceof Error ? err.message : String(err)}) \u2014 failing closed`, "evaluate");
         }
         requestBody = JSON.stringify(built);
       }
@@ -392,7 +392,7 @@ var require_dist = __commonJS({
     }
     async function waitForApprovalResolution3(config) {
       if (!config.approvalId) {
-        throw new EnforceError2("Cannot wait for approval: no approvalRequestId on the hold/escalate decision", "evaluate");
+        throw new EnforceError3("Cannot wait for approval: no approvalRequestId on the hold/escalate decision", "evaluate");
       }
       const apiUrl = (config.apiUrl ?? DEFAULT_API_URL).replace(/\/$/, "");
       const url = `${apiUrl}/v1-approvals/${encodeURIComponent(config.approvalId)}`;
@@ -407,10 +407,10 @@ var require_dist = __commonJS({
           continue;
         }
         if (status === 401 || status === 403) {
-          throw new EnforceError2(`Approval status poll: authentication failed (HTTP ${status})`, "evaluate");
+          throw new EnforceError3(`Approval status poll: authentication failed (HTTP ${status})`, "evaluate");
         }
         if (status === 404) {
-          throw new EnforceError2("Approval status poll: approval request not found", "evaluate");
+          throw new EnforceError3("Approval status poll: approval request not found", "evaluate");
         }
         if (status === 200) {
           let raw;
@@ -440,7 +440,7 @@ var require_dist = __commonJS({
         }
         await sleep(APPROVAL_POLL_INTERVAL_MS);
       }
-      throw new EnforceError2(`Approval wait timed out after ${config.maxWaitMs}ms with no human resolution \u2014 failing closed`, "evaluate");
+      throw new EnforceError3(`Approval wait timed out after ${config.maxWaitMs}ms with no human resolution \u2014 failing closed`, "evaluate");
     }
     exports2.CLOUD_LOCUS_CONTEXT_KEYS = ["aws", "azure"];
     async function postVerify(config, permitToken, decision) {
@@ -469,26 +469,26 @@ var require_dist = __commonJS({
         bodyObj["context"] = locus;
       const missing = (config.requiredBindings ?? []).filter((b) => bodyObj[b] == null || bodyObj[b] === "");
       if (missing.length > 0) {
-        throw new EnforceError2(`verify-permit refused: required binding(s) absent: ${missing.join(", ")}`, "verify-permit", decision, { outcome: "invalid", verifyErrorCode: "MISSING_BINDING" });
+        throw new EnforceError3(`verify-permit refused: required binding(s) absent: ${missing.join(", ")}`, "verify-permit", decision, { outcome: "invalid", verifyErrorCode: "MISSING_BINDING" });
       }
       let status;
       let body;
       try {
         ({ status, body } = await (0, transport_1.post)(`${apiUrl}/v1-verify-permit`, JSON.stringify(bodyObj), runtimeHeaders(config, apiUrl)));
       } catch (err) {
-        throw new EnforceError2(`verify-permit unreachable: ${err instanceof Error ? err.message : String(err)}`, "verify-permit", decision);
+        throw new EnforceError3(`verify-permit unreachable: ${err instanceof Error ? err.message : String(err)}`, "verify-permit", decision);
       }
       if (status >= 500) {
-        throw new EnforceError2(`verify-permit infrastructure failure (HTTP ${status})`, "verify-permit", decision);
+        throw new EnforceError3(`verify-permit infrastructure failure (HTTP ${status})`, "verify-permit", decision);
       }
       if (status < 200 || status >= 300) {
-        throw new EnforceError2(`verify-permit failed (HTTP ${status})`, "verify-permit", decision);
+        throw new EnforceError3(`verify-permit failed (HTTP ${status})`, "verify-permit", decision);
       }
       let raw;
       try {
         raw = JSON.parse(body);
       } catch {
-        throw new EnforceError2("Non-JSON response from verify-permit", "verify-permit", decision);
+        throw new EnforceError3("Non-JSON response from verify-permit", "verify-permit", decision);
       }
       const ok = raw.valid ?? raw.verified;
       return {
@@ -500,7 +500,7 @@ var require_dist = __commonJS({
         mismatchFields: Array.isArray(raw.mismatch_fields) ? raw.mismatch_fields : void 0
       };
     }
-    function requiredBindingsFor4(b) {
+    function requiredBindingsFor5(b) {
       const r = [];
       if (b.environment != null && b.environment !== "")
         r.push("environment");
@@ -510,28 +510,28 @@ var require_dist = __commonJS({
         r.push("payload_hash");
       return r;
     }
-    async function verifyPermit4(config, decision) {
+    async function verifyPermit5(config, decision) {
       if (!decision.permitToken) {
-        throw new EnforceError2("evaluate returned allow but no permit_token \u2014 refusing to execute without verifiable permit", "verify-permit", decision);
+        throw new EnforceError3("evaluate returned allow but no permit_token \u2014 refusing to execute without verifiable permit", "verify-permit", decision);
       }
       const r = await postVerify(config, decision.permitToken, decision);
       if (!r.verified) {
-        throw new EnforceError2(`Permit verification failed (outcome=${r.outcome ?? "unknown"}${r.verifyErrorCode ? `, code=${r.verifyErrorCode}` : ""})`, "verify-permit", decision, { outcome: r.outcome, verifyErrorCode: r.verifyErrorCode, mismatchFields: r.mismatchFields });
+        throw new EnforceError3(`Permit verification failed (outcome=${r.outcome ?? "unknown"}${r.verifyErrorCode ? `, code=${r.verifyErrorCode}` : ""})`, "verify-permit", decision, { outcome: r.outcome, verifyErrorCode: r.verifyErrorCode, mismatchFields: r.mismatchFields });
       }
       return r;
     }
     async function reverifyPermit2(config, permitToken) {
       if (!permitToken || !permitToken.trim()) {
-        throw new EnforceError2("no permit_token presented at execution boundary \u2014 refusing to execute", "verify-permit", null, { outcome: "invalid", verifyErrorCode: "MISSING_PERMIT" });
+        throw new EnforceError3("no permit_token presented at execution boundary \u2014 refusing to execute", "verify-permit", null, { outcome: "invalid", verifyErrorCode: "MISSING_PERMIT" });
       }
       const r = await postVerify(config, permitToken, null);
       if (!r.verified) {
-        throw new EnforceError2(`Permit re-verification failed at execution boundary (outcome=${r.outcome ?? "unknown"}${r.verifyErrorCode ? `, code=${r.verifyErrorCode}` : ""})`, "verify-permit", null, { outcome: r.outcome, verifyErrorCode: r.verifyErrorCode, mismatchFields: r.mismatchFields });
+        throw new EnforceError3(`Permit re-verification failed at execution boundary (outcome=${r.outcome ?? "unknown"}${r.verifyErrorCode ? `, code=${r.verifyErrorCode}` : ""})`, "verify-permit", null, { outcome: r.outcome, verifyErrorCode: r.verifyErrorCode, mismatchFields: r.mismatchFields });
       }
       return r;
     }
     function ranThenFailedCopy(err) {
-      const copy = new EnforceError2(err.message, err.phase, err.decision, {
+      const copy = new EnforceError3(err.message, err.phase, err.decision, {
         outcome: err.outcome,
         verifyErrorCode: err.verifyErrorCode,
         mismatchFields: err.mismatchFields
@@ -543,11 +543,11 @@ var require_dist = __commonJS({
       let decision;
       let vp;
       try {
-        decision = await evaluate2(config);
+        decision = await evaluate3(config);
         verify2(decision);
-        vp = await verifyPermit4(config, decision);
+        vp = await verifyPermit5(config, decision);
       } catch (err) {
-        if (err instanceof EnforceError2)
+        if (err instanceof EnforceError3)
           blockedBeforeExecutionErrors.add(err);
         throw err;
       }
@@ -555,7 +555,7 @@ var require_dist = __commonJS({
         const result = await fn();
         return { result, decision, verifyOutcome: vp.outcome };
       } catch (err) {
-        if (err instanceof EnforceError2 && blockedBeforeExecutionErrors.has(err)) {
+        if (err instanceof EnforceError3 && blockedBeforeExecutionErrors.has(err)) {
           throw ranThenFailedCopy(err);
         }
         throw err;
@@ -642,8 +642,8 @@ __export(src_exports, {
   run: () => run
 });
 module.exports = __toCommonJS(src_exports);
-var import_enforce15 = __toESM(require_dist());
 var import_enforce16 = __toESM(require_dist());
+var import_enforce17 = __toESM(require_dist());
 
 // src/gate.ts
 var GateInfraError = class extends Error {
@@ -2040,8 +2040,335 @@ function normalizeExecutionPayloadHash(digest) {
   return /^[0-9a-f]{64}$/i.test(stripped) ? stripped.toLowerCase() : digest;
 }
 
-// src/vqpVerify.ts
+// src/changePlan.ts
+function buildMandatoryChangePlan(actionType, revision, artifactDigest) {
+  if (!MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType))
+    return void 0;
+  const operation = actionType.split(".").pop() || actionType;
+  return {
+    operation,
+    revision,
+    ...artifactDigest ? { artifact_ref: artifactDigest } : {}
+  };
+}
+
+// src/rehearsal.ts
 var import_enforce9 = __toESM(require_dist());
+var REHEARSAL_CASE_IDS = [
+  "unauthorized_denied",
+  "missing_approval_denied_or_held",
+  "authorized_action_succeeds",
+  "changed_or_replayed_denied",
+  "changed_target_denied"
+];
+var REHEARSAL_CASE_EXPECTATIONS = {
+  unauthorized_denied: "deny ACTOR_UNVERIFIED (no verified actor), no permit",
+  missing_approval_denied_or_held: "deny INSUFFICIENT_APPROVALS, or hold/escalate (approvals 0), no permit",
+  authorized_action_succeeds: "allow with a permit and execution hash, then verified",
+  changed_or_replayed_denied: "the same permit presented again is refused PERMIT_ALREADY_USED",
+  changed_target_denied: "a fresh permit presented for a changed target is refused PERMIT_BINDING_MISMATCH, then verified for its own target"
+};
+var UNVERIFIED_REHEARSAL_ACTOR = "rehearsal:unverified-actor";
+var CHANGED_TARGET_SUFFIX = "--rehearsal-changed";
+var RehearsalError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "RehearsalError";
+  }
+};
+var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function parseRehearsalRequestId(raw) {
+  const value = raw.trim();
+  return UUID_RE.test(value) ? value.toLowerCase() : null;
+}
+var CLIENT_SIDE_VERIFY_CODES = /* @__PURE__ */ new Set(["MISSING_BINDING", "MISSING_PERMIT"]);
+function runtimeVerifyRefusal(err) {
+  if (!(err instanceof import_enforce9.EnforceError) || err.phase !== "verify-permit")
+    return null;
+  if (err.verifyErrorCode && CLIENT_SIDE_VERIFY_CODES.has(err.verifyErrorCode))
+    return null;
+  if (err.outcome === void 0 && err.verifyErrorCode === void 0)
+    return null;
+  return { outcome: err.outcome, code: err.verifyErrorCode };
+}
+function isVerifiableAllow(d) {
+  return d.decision === "allow" && !!d.permitToken && !!d.executionHashExpected;
+}
+function decisionFields(d) {
+  return {
+    decision: typeof d.decision === "string" ? d.decision : null,
+    deny_code: d.denyCode ?? null,
+    request_id: d.evaluationId ?? null
+  };
+}
+function notRun(caseId, requestId = null) {
+  return { case_id: caseId, status: "not_run", decision: null, deny_code: null, request_id: requestId };
+}
+function describeError(err) {
+  if (err instanceof WorkloadIdentityError)
+    return `workload identity mint failed: ${err.message}`;
+  if (err instanceof import_enforce9.EnforceError)
+    return `AtlaSent ${err.phase} call failed: ${err.message}`;
+  return err instanceof Error ? err.message : String(err);
+}
+async function runRehearsal(args, deps) {
+  const results = /* @__PURE__ */ new Map();
+  const record = (r) => {
+    results.set(r.case_id, r);
+    deps.log(
+      `  [${r.status}] ${r.case_id}: decision=${r.decision ?? "-"} deny_code=${r.deny_code ?? "-"}` + (r.verify_outcome !== void 0 || r.verify_error_code !== void 0 ? ` verify=${r.verify_outcome ?? "-"}/${r.verify_error_code ?? "-"}` : "") + (r.control_verify_outcome !== void 0 || r.control_verify_error_code !== void 0 ? ` control_verify=${r.control_verify_outcome ?? "-"}/${r.control_verify_error_code ?? "-"}` : "") + ` request_id=${r.request_id ?? "-"}`
+    );
+  };
+  const finish = (error) => {
+    const cases = REHEARSAL_CASE_IDS.map((id) => results.get(id) ?? notRun(id));
+    const verdict = error === void 0 && cases.every((c) => c.status === "expected") ? "all_expected" : "unexpected";
+    return { requestId: args.requestId, cases, verdict, ...error !== void 0 ? { error } : {} };
+  };
+  try {
+    await runCases(args, deps, record);
+    return finish();
+  } catch (err) {
+    return finish(describeError(err));
+  }
+}
+async function runCases(args, deps, record) {
+  const { apiKey, apiUrl, requestId, actionType, targetId, environment, github: gh } = args;
+  let evaluatedActorId;
+  let revision;
+  const mintFresh = async (purpose) => {
+    const minted = await mintGithubActionsActorIdentity(
+      { apiUrl, apiKey, actionType, environment },
+      { mask: deps.mask }
+    );
+    if (evaluatedActorId === void 0) {
+      evaluatedActorId = minted.actorId;
+    } else if (minted.actorId !== evaluatedActorId) {
+      throw new RehearsalError(
+        `the identity minted for ${purpose} names actor "${minted.actorId}", not "${evaluatedActorId}"`
+      );
+    }
+    if (revision !== void 0 && minted.source.sha !== revision) {
+      throw new RehearsalError(
+        `the identity minted for ${purpose} carries commit "${minted.source.sha}", not "${revision}"`
+      );
+    }
+    return minted;
+  };
+  const case2Identity = await mintFresh("case 2 evaluate");
+  revision = case2Identity.source.sha;
+  if (!revision) {
+    throw new RehearsalError(
+      "the verified GitHub workload identity did not carry a commit SHA, so a complete change_plan cannot be derived"
+    );
+  }
+  const changePlan = buildMandatoryChangePlan(
+    actionType,
+    revision,
+    args.artifactDigest
+  );
+  if (!changePlan) {
+    throw new RehearsalError(`"${actionType}" is not a mandatory change-control action`);
+  }
+  const triggeringActor = `github:${case2Identity.source.actor}`;
+  const derivedApprovals = args.approvalEvidence ? {
+    approvals: args.approvalEvidence.approvals,
+    approving_reviewers: args.approvalEvidence.approving_reviewers
+  } : {};
+  const evalConfig = (caseId, opts) => ({
+    apiKey,
+    apiUrl,
+    action: actionType,
+    actor: opts.actor,
+    ...opts.identity ? { actorIdentity: opts.identity.assertion } : {},
+    environment,
+    targetId,
+    changePlan,
+    state_snapshot: { source: "github-actions", complete: true, run_id: gh.run_id },
+    context: {
+      source: "github-action",
+      repository: gh.repository,
+      ref: gh.ref,
+      sha: gh.sha,
+      workflow: gh.workflow,
+      run_id: gh.run_id,
+      run_number: gh.run_number,
+      event_name: gh.event_name,
+      triggering_actor: triggeringActor,
+      pr_number: args.approvalEvidence?.pr_number ?? gh.pr_number ?? null,
+      run_url: `${gh.server_url}/${gh.repository}/actions/runs/${gh.run_id}`,
+      ...opts.approvals,
+      // Applied last: nothing above can shadow the markers the console
+      // finds these evaluations by.
+      rehearsal_request_id: requestId,
+      rehearsal_case: caseId
+    }
+  });
+  const evaluateCase = async (config) => {
+    const d = await (0, import_enforce9.evaluate)(config);
+    if (d.permitToken)
+      deps.mask(d.permitToken);
+    if (d.proofHash)
+      deps.mask(d.proofHash);
+    return d;
+  };
+  const verifyCase = async (decision, presentedTarget, purpose) => {
+    const minted = await mintFresh(purpose);
+    const config = {
+      apiKey,
+      apiUrl,
+      action: actionType,
+      actor: minted.actorId,
+      actorIdentity: minted.assertion,
+      environment,
+      targetId: presentedTarget,
+      requiredBindings: (0, import_enforce9.requiredBindingsFor)({
+        environment,
+        targetId: presentedTarget,
+        executionPayloadHash: decision.executionHashExpected
+      })
+    };
+    try {
+      const r = await (0, import_enforce9.verifyPermit)(config, decision);
+      return { verified: r.verified === true, outcome: r.outcome, code: r.verifyErrorCode };
+    } catch (err) {
+      const refusal = runtimeVerifyRefusal(err);
+      if (refusal)
+        return { verified: false, ...refusal };
+      throw err;
+    }
+  };
+  {
+    const d = await evaluateCase(
+      evalConfig("unauthorized_denied", { actor: UNVERIFIED_REHEARSAL_ACTOR, approvals: derivedApprovals })
+    );
+    const expected2 = d.decision === "deny" && d.denyCode === "ACTOR_UNVERIFIED" && !d.permitToken;
+    record({ case_id: "unauthorized_denied", status: expected2 ? "expected" : "unexpected", ...decisionFields(d) });
+  }
+  {
+    const d = await evaluateCase(
+      evalConfig("missing_approval_denied_or_held", {
+        actor: case2Identity.actorId,
+        identity: case2Identity,
+        approvals: { approvals: 0 }
+      })
+    );
+    const refused = d.decision === "deny" && d.denyCode === "INSUFFICIENT_APPROVALS" || d.decision === "hold" || d.decision === "escalate";
+    record({
+      case_id: "missing_approval_denied_or_held",
+      status: refused && !d.permitToken ? "expected" : "unexpected",
+      ...decisionFields(d)
+    });
+  }
+  const case3Identity = await mintFresh("case 3 evaluate");
+  const d3 = await evaluateCase(
+    evalConfig("authorized_action_succeeds", {
+      actor: case3Identity.actorId,
+      identity: case3Identity,
+      approvals: derivedApprovals
+    })
+  );
+  const case3Allowed = isVerifiableAllow(d3);
+  let case3Verified = false;
+  if (!case3Allowed) {
+    record({ case_id: "authorized_action_succeeds", status: "unexpected", ...decisionFields(d3) });
+  } else {
+    const v = await verifyCase(d3, targetId, "case 3 verify");
+    case3Verified = v.verified;
+    record({
+      case_id: "authorized_action_succeeds",
+      status: v.verified ? "expected" : "unexpected",
+      ...decisionFields(d3),
+      verify_outcome: v.outcome ?? (v.verified ? "verified" : void 0),
+      ...v.code !== void 0 ? { verify_error_code: v.code } : {}
+    });
+  }
+  if (!case3Verified) {
+    record(notRun("changed_or_replayed_denied", d3.evaluationId ?? null));
+  } else {
+    const v = await verifyCase(d3, targetId, "case 4 replay verify");
+    record({
+      case_id: "changed_or_replayed_denied",
+      status: !v.verified && v.code === "PERMIT_ALREADY_USED" ? "expected" : "unexpected",
+      decision: null,
+      deny_code: null,
+      request_id: d3.evaluationId ?? null,
+      verify_outcome: v.outcome ?? (v.verified ? "verified" : void 0),
+      ...v.code !== void 0 ? { verify_error_code: v.code } : {}
+    });
+  }
+  if (!case3Allowed) {
+    record(notRun("changed_target_denied"));
+    return;
+  }
+  const case5Identity = await mintFresh("case 5 evaluate");
+  const d5 = await evaluateCase(
+    evalConfig("changed_target_denied", {
+      actor: case5Identity.actorId,
+      identity: case5Identity,
+      approvals: derivedApprovals
+    })
+  );
+  if (!isVerifiableAllow(d5)) {
+    record({ case_id: "changed_target_denied", status: "not_run", ...decisionFields(d5) });
+    return;
+  }
+  const changed = await verifyCase(d5, `${targetId}${CHANGED_TARGET_SUFFIX}`, "case 5 changed-target verify");
+  const control = changed.verified ? void 0 : await verifyCase(d5, targetId, "case 5 control verify");
+  const expected = !changed.verified && changed.code === "PERMIT_BINDING_MISMATCH" && control?.verified === true;
+  record({
+    case_id: "changed_target_denied",
+    status: expected ? "expected" : "unexpected",
+    ...decisionFields(d5),
+    verify_outcome: changed.outcome ?? (changed.verified ? "verified" : void 0),
+    ...changed.code !== void 0 ? { verify_error_code: changed.code } : {},
+    ...control ? {
+      control_verify_outcome: control.outcome ?? (control.verified ? "verified" : void 0),
+      ...control.code !== void 0 ? { control_verify_error_code: control.code } : {}
+    } : {}
+  });
+}
+function cell(value) {
+  if (value === null || value === void 0 || value === "")
+    return "\u2014";
+  return `\`${value.replace(/[`|\r\n]/g, " ").slice(0, 120)}\``;
+}
+function verifyCell(outcome, code) {
+  if (outcome === void 0 && code === void 0)
+    return "\u2014";
+  return [outcome, code].filter((v) => v !== void 0 && v !== "").map((v) => cell(v)).join(" / ");
+}
+function renderRehearsalStepSummary(report, meta) {
+  const statusLabel = {
+    expected: "expected",
+    unexpected: "**UNEXPECTED**",
+    not_run: "**not run**"
+  };
+  const rows = report.cases.map((c) => {
+    const verify2 = verifyCell(c.verify_outcome, c.verify_error_code) + (c.control_verify_outcome !== void 0 || c.control_verify_error_code !== void 0 ? `; own target: ${verifyCell(c.control_verify_outcome, c.control_verify_error_code)}` : "");
+    return `| \`${c.case_id}\` | ${REHEARSAL_CASE_EXPECTATIONS[c.case_id]} | ${statusLabel[c.status]} | ${cell(c.decision)} | ${cell(c.deny_code)} | ${verify2} | ${cell(c.request_id)} |`;
+  });
+  const heading = report.verdict === "all_expected" ? "## AtlaSent authorization rehearsal: all five cases as expected" : "## AtlaSent authorization rehearsal: NOT all cases as expected";
+  return [
+    "",
+    "---",
+    heading,
+    "",
+    `Rehearsal \`${report.requestId}\` for \`${meta.actionType}\` on target \`${meta.targetId}\` in \`${meta.environment}\`.`,
+    "",
+    "| Case | Expected | Status | Decision | Deny code | Verify | Request ID |",
+    "|---|---|---|---|---|---|---|",
+    ...rows,
+    "",
+    ...report.error ? [`Stopped early: ${report.error.replace(/[\r\n]/g, " ").slice(0, 500)}`, ""] : [],
+    "> **This verdict is informational.** The AtlaSent console decides whether the rehearsal passed from the runtime's own records of these calls (found by `context.rehearsal_request_id`). That server-side check is what counts. A rehearsal never authorizes a protected step.",
+    "",
+    `[View workflow run](${meta.runUrl})`,
+    ""
+  ].join("\n");
+}
+
+// src/vqpVerify.ts
+var import_enforce10 = __toESM(require_dist());
 async function runVqpVerify(inputs, fetchFn = globalThis.fetch) {
   const base = inputs.supabaseUrl.replace(/\/$/, "");
   const url = `${base}/functions/v1/v1-verify-vqp`;
@@ -2050,7 +2377,7 @@ async function runVqpVerify(inputs, fetchFn = globalThis.fetch) {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${inputs.serviceRoleKey}`,
-      ...(0, import_enforce9.functionRegionHeaders)(url)
+      ...(0, import_enforce10.functionRegionHeaders)(url)
     },
     body: JSON.stringify({
       snapshot_id: inputs.snapshotId,
@@ -2442,7 +2769,7 @@ function deployReadbackSummary(r) {
 
 // src/changeBrief.ts
 var fs3 = __toESM(require("fs"));
-var import_enforce10 = __toESM(require_dist());
+var import_enforce11 = __toESM(require_dist());
 var GITHUB_API_DEFAULT = "https://api.github.com";
 function canonicalize(value) {
   if (value === null || typeof value !== "object")
@@ -2771,7 +3098,7 @@ async function runChangeBrief(opts) {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${opts.apiKey}`,
-        ...(0, import_enforce10.functionRegionHeaders)(url)
+        ...(0, import_enforce11.functionRegionHeaders)(url)
       },
       body: JSON.stringify({
         action_type: opts.actionType,
@@ -2986,7 +3313,7 @@ function renderChangeBriefStepSummary(result) {
 }
 
 // src/soloOperatorAttest.ts
-var import_enforce11 = __toESM(require_dist());
+var import_enforce12 = __toESM(require_dist());
 var SOLO_OPERATOR_ATTEST_ACTION_TYPE = "solo_operator.attest";
 var SoloOperatorAttestError = class extends Error {
   constructor(message) {
@@ -3057,7 +3384,7 @@ async function attestSoloOperator(args, deps = {}) {
     response = await resolved.fetchImpl(`${apiUrl}/v1-solo-operator-attest`, {
       method: "POST",
       headers: {
-        ...(0, import_enforce11.functionRegionHeaders)(apiUrl),
+        ...(0, import_enforce12.functionRegionHeaders)(apiUrl),
         Authorization: `Bearer ${args.apiKey}`,
         "Content-Type": "application/json",
         Accept: "application/json"
@@ -3102,7 +3429,7 @@ async function attestSoloOperator(args, deps = {}) {
 }
 
 // src/githubApprovalMint.ts
-var import_enforce12 = __toESM(require_dist());
+var import_enforce13 = __toESM(require_dist());
 var GithubApprovalMintError = class extends Error {
   constructor(message) {
     super(message);
@@ -3126,7 +3453,7 @@ async function mintGithubApprovalArtifacts(args, deps = {}) {
     response = await fetchImpl(`${apiUrl}/v1-github-approval-mint`, {
       method: "POST",
       headers: {
-        ...(0, import_enforce12.functionRegionHeaders)(apiUrl),
+        ...(0, import_enforce13.functionRegionHeaders)(apiUrl),
         Authorization: `Bearer ${args.apiKey}`,
         "Content-Type": "application/json",
         Accept: "application/json"
@@ -3755,7 +4082,7 @@ function renderPostureStepSummary(result) {
 }
 
 // src/insights.ts
-var import_enforce13 = __toESM(require_dist());
+var import_enforce14 = __toESM(require_dist());
 async function runInsightsEvaluate(cfg, log = console) {
   try {
     const res = await fetch(
@@ -3765,7 +4092,7 @@ async function runInsightsEvaluate(cfg, log = console) {
         headers: {
           Authorization: `Bearer ${cfg.apiKey}`,
           "Content-Type": "application/json",
-          ...(0, import_enforce13.functionRegionHeaders)(cfg.apiUrl)
+          ...(0, import_enforce14.functionRegionHeaders)(cfg.apiUrl)
         },
         body: JSON.stringify({
           subjectId: cfg.subjectId,
@@ -3800,7 +4127,7 @@ async function runInsightsEvaluate(cfg, log = console) {
 
 // src/executionAdmission.ts
 var import_crypto = require("crypto");
-var import_enforce14 = __toESM(require_dist());
+var import_enforce15 = __toESM(require_dist());
 var GITHUB_API_DEFAULT2 = "https://api.github.com";
 var PAYLOAD_HASH_RE = /^[0-9a-f]{64}$/;
 var MAX_JOB_PAGES = 10;
@@ -3865,7 +4192,7 @@ async function admitExecution(args, deps = {}) {
     ...args.executorActorIdentity ? { executor_actor_identity: args.executorActorIdentity } : {}
   };
   const locus = {};
-  for (const key of import_enforce14.CLOUD_LOCUS_CONTEXT_KEYS) {
+  for (const key of import_enforce15.CLOUD_LOCUS_CONTEXT_KEYS) {
     const value = args.context?.[key];
     if (value != null)
       locus[key] = value;
@@ -3877,7 +4204,7 @@ async function admitExecution(args, deps = {}) {
     response = await fetchImpl(`${apiUrl}/v1-consequential-operations/consume-and-admit`, {
       method: "POST",
       headers: {
-        ...(0, import_enforce14.functionRegionHeaders)(apiUrl),
+        ...(0, import_enforce15.functionRegionHeaders)(apiUrl),
         Authorization: `Bearer ${args.apiKey}`,
         "Content-Type": "application/json",
         Accept: "application/json"
@@ -3987,7 +4314,7 @@ async function postRuntime(fetchImpl, apiUrl, apiKey, path4, body) {
   const res = await fetchImpl(`${base}/v1-consequential-operations/${path4}`, {
     method: "POST",
     headers: {
-      ...(0, import_enforce14.functionRegionHeaders)(base),
+      ...(0, import_enforce15.functionRegionHeaders)(base),
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
       Accept: "application/json"
@@ -4550,7 +4877,7 @@ async function runVerifyPermitStep(apiKey, apiUrl) {
     ...boundaryContext ? { context: boundaryContext } : {},
     // Boundary re-verify must re-present every binding it was given, or fail
     // closed (MISSING_BINDING) — never a silently-unbound boundary verify.
-    requiredBindings: (0, import_enforce15.requiredBindingsFor)({
+    requiredBindings: (0, import_enforce16.requiredBindingsFor)({
       environment,
       targetId,
       executionPayloadHash: verificationPayloadHash
@@ -4560,7 +4887,7 @@ async function runVerifyPermitStep(apiKey, apiUrl) {
     `AtlaSent boundary re-verification: "${actionType}" for "${actorId}" in ${environment}` + (artifactDigest ? ` (artifact=${artifactDigest})` : "")
   );
   try {
-    const r = await (0, import_enforce15.reverifyPermit)(config, permitToken);
+    const r = await (0, import_enforce16.reverifyPermit)(config, permitToken);
     setOutput("decision", "allow");
     setOutput("verified", "true");
     setOutput("verify-outcome", r.outcome ?? "verified");
@@ -4574,7 +4901,7 @@ async function runVerifyPermitStep(apiKey, apiUrl) {
   } catch (err) {
     setOutput("decision", "deny");
     setOutput("verified", "false");
-    if (err instanceof import_enforce15.EnforceError) {
+    if (err instanceof import_enforce16.EnforceError) {
       setOutput("verify-outcome", err.outcome ?? "invalid");
       setOutput("verify-error-code", err.verifyErrorCode ?? "");
       setFailed(
@@ -4588,6 +4915,87 @@ async function runVerifyPermitStep(apiKey, apiUrl) {
       `Deploy blocked at execution boundary: ${err instanceof Error ? err.message : String(err)}`
     );
   }
+}
+async function runRehearsalStep(apiKey, apiUrl) {
+  setOutput("verified", "false");
+  const failInput = (message) => {
+    setOutput("rehearsal-verdict", "unexpected");
+    setFailed(`AtlaSent rehearsal: ${message} No rehearsal call was made (fail-closed).`);
+  };
+  const rawRequestId = getInput("rehearsal-request-id");
+  const requestId = parseRehearsalRequestId(rawRequestId);
+  if (!requestId) {
+    return failInput(
+      "`rehearsal-request-id` must be a UUID (the id the AtlaSent console issued for this rehearsal)."
+    );
+  }
+  const rawAction = getInput("action");
+  const actionType = normalizeProtectedAction(rawAction).canonical;
+  if (!MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType)) {
+    return failInput(
+      `\`action\` must be one of ${[...MANDATORY_CHANGE_CONTROL_ACTIONS].map((a) => `"${a}"`).join(", ")} for a rehearsal (got "${rawAction}").`
+    );
+  }
+  const targetId = getInput("target-id");
+  if (!targetId) {
+    return failInput("`target-id` is required: every rehearsal case is bound to one target.");
+  }
+  const environment = getInput("environment");
+  if (!environment) {
+    return failInput("`environment` is required and is not derived in rehearsal mode.");
+  }
+  const artifactDigest = getInput("artifact-digest") || void 0;
+  const gh = getGitHubContext();
+  const approvalsFrom = (getInput("approvals-from") || "pr-reviews").toLowerCase();
+  const approvalEvidence = approvalsFrom === "pr-reviews" ? await resolveApprovals({
+    repository: gh.repository,
+    sha: gh.sha,
+    prNumber: gh.pr_number ?? null,
+    token: process.env["GITHUB_TOKEN"],
+    apiBase: process.env["GITHUB_API_URL"],
+    log: info,
+    warn: warning
+  }) : null;
+  info(
+    `AtlaSent rehearsal ${requestId}: running 5 authorization cases for "${actionType}" on target "${targetId}" in ${environment}.`
+  );
+  const report = await runRehearsal(
+    {
+      apiKey,
+      apiUrl,
+      requestId,
+      actionType,
+      targetId,
+      environment,
+      artifactDigest,
+      approvalEvidence,
+      github: gh
+    },
+    { mask: maskValue, log: info }
+  );
+  setOutput("rehearsal-request-id", report.requestId);
+  setOutput("rehearsal-cases", JSON.stringify(report.cases));
+  setOutput("rehearsal-verdict", report.verdict);
+  appendToStepSummary(
+    renderRehearsalStepSummary(report, {
+      actionType,
+      targetId,
+      environment,
+      runUrl: `${gh.server_url}/${gh.repository}/actions/runs/${gh.run_id}`
+    })
+  );
+  if (report.error !== void 0) {
+    setFailed(`AtlaSent rehearsal ${requestId}: stopped (fail-closed): ${report.error}`);
+  }
+  if (report.verdict !== "all_expected") {
+    const off = report.cases.filter((c) => c.status !== "expected").map((c) => `${c.case_id}=${c.status}`).join(", ");
+    setFailed(
+      `AtlaSent rehearsal ${requestId}: not every case behaved as expected (${off}). See the rehearsal-cases output and the job summary.`
+    );
+  }
+  info(
+    `AtlaSent rehearsal ${requestId}: all five cases behaved as expected. This is informational; the AtlaSent console's server-side check of the runtime's records is what counts.`
+  );
 }
 async function runAdmitOperationStep(apiKey, apiUrl) {
   setOutput("verified", "false");
@@ -5368,10 +5776,10 @@ async function run() {
   const functionRegionInput = getInput("function-region");
   try {
     if (functionRegionInput) {
-      (0, import_enforce16.parseFunctionRegion)(functionRegionInput);
-      process.env[import_enforce16.FUNCTION_REGION_ENV] = functionRegionInput.trim();
-    } else if (process.env[import_enforce16.FUNCTION_REGION_ENV]?.trim()) {
-      (0, import_enforce16.parseFunctionRegion)(process.env[import_enforce16.FUNCTION_REGION_ENV]);
+      (0, import_enforce17.parseFunctionRegion)(functionRegionInput);
+      process.env[import_enforce17.FUNCTION_REGION_ENV] = functionRegionInput.trim();
+    } else if (process.env[import_enforce17.FUNCTION_REGION_ENV]?.trim()) {
+      (0, import_enforce17.parseFunctionRegion)(process.env[import_enforce17.FUNCTION_REGION_ENV]);
     }
   } catch (err) {
     setOutput("decision", "error");
@@ -5434,6 +5842,10 @@ async function run() {
     await runVerifyPermitStep(apiKey, apiUrl);
     return;
   }
+  if (getInput("rehearsal-request-id")) {
+    await runRehearsalStep(apiKey, apiUrl);
+    return;
+  }
   const evaluationsRaw = getInput("evaluations");
   if (evaluationsRaw) {
     const waitForId = getInput("wait-for-id") || void 0;
@@ -5454,7 +5866,7 @@ async function run() {
         { mask: maskValue }
       );
     } catch (err) {
-      const msg = err instanceof import_enforce15.EnforceError || err instanceof GateInfraError || err instanceof WorkloadIdentityError ? err.message : `Unexpected error: ${err instanceof Error ? err.message : String(err)}`;
+      const msg = err instanceof import_enforce16.EnforceError || err instanceof GateInfraError || err instanceof WorkloadIdentityError ? err.message : `Unexpected error: ${err instanceof Error ? err.message : String(err)}`;
       setOutput("verified", "false");
       setOutput("decisions", "[]");
       setOutput("batch-id", "");
@@ -5627,12 +6039,11 @@ async function run() {
     }
   } : void 0;
   const artifactDigest = getInput("artifact-digest") || void 0;
-  const changePlanOperation = actionType.split(".").pop() || actionType;
-  const productionChangePlan = MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType) ? {
-    operation: changePlanOperation,
-    revision: actorResolution.workloadIdentity?.source.sha ?? "",
-    ...artifactDigest ? { artifact_ref: artifactDigest } : {}
-  } : void 0;
+  const productionChangePlan = buildMandatoryChangePlan(
+    actionType,
+    actorResolution.workloadIdentity?.source.sha ?? "",
+    artifactDigest
+  );
   if (productionChangePlan && !productionChangePlan.revision) {
     setOutput("decision", "deny");
     setOutput("verified", "false");
@@ -5737,7 +6148,7 @@ async function run() {
     executionPayloadHash: directExecutionPayloadHash,
     // Re-present every binding provided here at verify, or fail closed
     // (MISSING_BINDING) rather than silently drop it.
-    requiredBindings: (0, import_enforce15.requiredBindingsFor)({
+    requiredBindings: (0, import_enforce16.requiredBindingsFor)({
       environment,
       targetId,
       executionPayloadHash: directExecutionPayloadHash
@@ -5844,7 +6255,7 @@ async function run() {
         const runUrl = `${gh.server_url}/${gh.repository}/actions/runs/${gh.run_id}`;
         const decisionStr = err.decision?.decision ?? "error";
         const isActionable = decisionStr === "deny" || decisionStr === "hold" || decisionStr === "escalate";
-        const reason = decisionStr === "deny" ? (0, import_enforce15.denyReasonText)(err.decision) : decisionStr === "hold" ? err.decision?.holdReason ?? "awaiting approval" : decisionStr === "escalate" ? "escalated \u2014 manual review required" : err.message.slice(0, 200);
+        const reason = decisionStr === "deny" ? (0, import_enforce16.denyReasonText)(err.decision) : decisionStr === "hold" ? err.decision?.holdReason ?? "awaiting approval" : decisionStr === "escalate" ? "escalated \u2014 manual review required" : err.message.slice(0, 200);
         if (slackWebhook && isActionable) {
           await notifySlack(slackWebhook, {
             decision: decisionStr,
@@ -5890,7 +6301,7 @@ async function run() {
       {
         const blockedDecision = err.decision?.decision;
         const summaryOutcome = blockedDecision === "deny" || blockedDecision === "hold" || blockedDecision === "escalate" ? blockedDecision : "error";
-        const summaryReason = summaryOutcome === "deny" ? err.decision?.denyReason || err.decision?.denyCode ? (0, import_enforce15.denyReasonText)(err.decision) : err.message : summaryOutcome === "hold" ? err.decision?.holdReason ?? "awaiting approval" : summaryOutcome === "escalate" ? "manual review required" : err.message;
+        const summaryReason = summaryOutcome === "deny" ? err.decision?.denyReason || err.decision?.denyCode ? (0, import_enforce16.denyReasonText)(err.decision) : err.message : summaryOutcome === "hold" ? err.decision?.holdReason ?? "awaiting approval" : summaryOutcome === "escalate" ? "manual review required" : err.message;
         appendToStepSummary(
           buildGateStepSummary({
             consoleBaseUrl: consoleBaseUrlInput(),
@@ -5920,7 +6331,7 @@ async function run() {
           switch (err.decision?.decision) {
             case "deny":
               setFailed(
-                `Authorization DENIED: ${(0, import_enforce15.denyReasonText)(err.decision)}`
+                `Authorization DENIED: ${(0, import_enforce16.denyReasonText)(err.decision)}`
               );
               break;
             case "hold":
@@ -5980,15 +6391,15 @@ async function run() {
   let enforceResult;
   try {
     if (evaluateOnly) {
-      const decision = await (0, import_enforce15.evaluate)(config);
-      (0, import_enforce15.verify)(decision);
+      const decision = await (0, import_enforce16.evaluate)(config);
+      (0, import_enforce16.verify)(decision);
       enforceResult = { result: void 0, decision, verifyOutcome: void 0 };
     } else {
-      enforceResult = await (0, import_enforce15.enforce)(config, async () => {
+      enforceResult = await (0, import_enforce16.enforce)(config, async () => {
       });
     }
   } catch (err) {
-    if (err instanceof import_enforce15.EnforceError) {
+    if (err instanceof import_enforce16.EnforceError) {
       const canWaitForApproval = waitForApprovalInput && err.phase === "verify" && (err.decision?.decision === "hold" || err.decision?.decision === "escalate") && !!err.decision?.approvalRequestId;
       if (!canWaitForApproval) {
         await reportEnforceFailure(err);
@@ -6001,7 +6412,7 @@ async function run() {
       );
       let resolution;
       try {
-        resolution = await (0, import_enforce15.waitForApprovalResolution)({
+        resolution = await (0, import_enforce16.waitForApprovalResolution)({
           apiKey,
           apiUrl,
           approvalId: originalDecision.approvalRequestId,
@@ -6017,7 +6428,7 @@ async function run() {
         });
       } catch (waitErr) {
         await reportEnforceFailure(
-          waitErr instanceof import_enforce15.EnforceError ? new import_enforce15.EnforceError(waitErr.message, "evaluate", originalDecision) : new import_enforce15.EnforceError(
+          waitErr instanceof import_enforce16.EnforceError ? new import_enforce16.EnforceError(waitErr.message, "evaluate", originalDecision) : new import_enforce16.EnforceError(
             `Approval wait failed: ${waitErr instanceof Error ? waitErr.message : String(waitErr)}`,
             "evaluate",
             originalDecision
@@ -6028,7 +6439,7 @@ async function run() {
       if (resolution.status !== "approved" && resolution.status !== "approved_awaiting_claim" || !resolution.permitToken) {
         const reason = (resolution.claimFailure === "change_plan_mismatch" ? `human approval resolved to '${resolution.status}', but the claim was refused: the change plan presented at claim differs from the plan that was approved (change_plan_mismatch)` : `human approval resolved to '${resolution.status}'` + (resolution.claimFailure ? ` (permit claim failed: ${resolution.claimFailure})` : "")) + (resolution.reEvaluationDecision ? ` (fresh reevaluation: ${resolution.reEvaluationDecision})` : "") + " \u2014 deploy blocked (fail-closed).";
         await reportEnforceFailure(
-          new import_enforce15.EnforceError(`Authorization DENIED: ${reason}`, "verify", {
+          new import_enforce16.EnforceError(`Authorization DENIED: ${reason}`, "verify", {
             ...originalDecision,
             decision: "deny",
             denyReason: reason
@@ -6039,7 +6450,7 @@ async function run() {
       if (MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType) && !resolution.executionHashExpected) {
         const reason = "human approval was granted and a permit was claimed, but the claim response carried no execution_hash_expected, so the permit cannot be verified against its bound change plan \u2014 deploy blocked (fail-closed).";
         await reportEnforceFailure(
-          new import_enforce15.EnforceError(`Authorization DENIED: ${reason}`, "verify", {
+          new import_enforce16.EnforceError(`Authorization DENIED: ${reason}`, "verify", {
             ...originalDecision,
             decision: "deny",
             denyReason: reason
@@ -6062,13 +6473,13 @@ async function run() {
       } else {
         let vr;
         try {
-          vr = await (0, import_enforce15.verifyPermit)(
+          vr = await (0, import_enforce16.verifyPermit)(
             claimActorIdentity ? { ...config, actorIdentity: claimActorIdentity } : config,
             freshDecision
           );
         } catch (verifyErr) {
           await reportEnforceFailure(
-            verifyErr instanceof import_enforce15.EnforceError ? new import_enforce15.EnforceError(
+            verifyErr instanceof import_enforce16.EnforceError ? new import_enforce16.EnforceError(
               `Human approval was granted, but the claimed permit failed verification: ${verifyErr.message}`,
               "verify-permit",
               freshDecision,
@@ -6077,7 +6488,7 @@ async function run() {
                 verifyErrorCode: verifyErr.verifyErrorCode,
                 mismatchFields: verifyErr.mismatchFields
               }
-            ) : new import_enforce15.EnforceError(
+            ) : new import_enforce16.EnforceError(
               `Human approval was granted, but verifying the claimed permit failed: ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`,
               "verify-permit",
               freshDecision
@@ -6087,7 +6498,7 @@ async function run() {
         }
         if (!vr.verified) {
           await reportEnforceFailure(
-            new import_enforce15.EnforceError(
+            new import_enforce16.EnforceError(
               `Human approval was granted, but the fresh permit failed verification (${vr.outcome ?? "unknown"}) \u2014 deploy blocked (fail-closed).`,
               "verify-permit",
               freshDecision,

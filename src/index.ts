@@ -13,6 +13,9 @@
 //                           CodeQL, secret scanning, org 2FA) via postureScan.ts.
 //                           Never gates; calls no AtlaSent API.
 //   policy-sync=true      → v1-policy-sync (post bundle, fail CI on rejection)
+//   rehearsal-request-id  → five authorization rehearsal cases (rehearsal.ts,
+//                           atlasent-console#3377); checked after the other
+//                           API-key modes, before batch/single-eval
 //   evaluations input set → v2.1 batch path via runV21()
 //   single action input   → @atlasent/enforce (canonical enforcement wrapper)
 //
@@ -66,6 +69,12 @@ import {
   normalizeProtectedAction,
 } from "./canonicalAction";
 import { normalizeExecutionPayloadHash } from "./executionPayloadHash";
+import { buildMandatoryChangePlan } from "./changePlan";
+import {
+  parseRehearsalRequestId,
+  renderRehearsalStepSummary,
+  runRehearsal,
+} from "./rehearsal";
 import { runVqpVerify } from "./vqpVerify";
 import { resolveApprovals, type ApprovalEvidence } from "./approvals";
 import { buildGateStepSummary, type GateOutcome } from "./stepSummary";
@@ -934,6 +943,119 @@ async function runVerifyPermitStep(apiKey: string, apiUrl: string): Promise<void
       `Deploy blocked at execution boundary: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+}
+
+// ── Authorization rehearsal step (atlasent-console#3377) ─────────────────────
+//
+// Runs the five rehearsal cases in rehearsal.ts against the runtime for one
+// mandatory change-control action. The verdict is informational: the console
+// decides from the runtime's own records. Every input is validated before any
+// network call, and anything short of five expected cases fails the step.
+async function runRehearsalStep(apiKey: string, apiUrl: string): Promise<void> {
+  // A rehearsal never authorizes a protected step, whatever its verdict.
+  setOutput("verified", "false");
+  const failInput = (message: string): never => {
+    setOutput("rehearsal-verdict", "unexpected");
+    setFailed(`AtlaSent rehearsal: ${message} No rehearsal call was made (fail-closed).`);
+  };
+
+  const rawRequestId = getInput("rehearsal-request-id");
+  const requestId = parseRehearsalRequestId(rawRequestId);
+  if (!requestId) {
+    return failInput(
+      "`rehearsal-request-id` must be a UUID (the id the AtlaSent console issued for this rehearsal).",
+    );
+  }
+
+  const rawAction = getInput("action");
+  const actionType = normalizeProtectedAction(rawAction).canonical;
+  if (!MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType)) {
+    return failInput(
+      `\`action\` must be one of ${[...MANDATORY_CHANGE_CONTROL_ACTIONS].map((a) => `"${a}"`).join(", ")} ` +
+        `for a rehearsal (got "${rawAction}").`,
+    );
+  }
+
+  const targetId = getInput("target-id");
+  if (!targetId) {
+    return failInput("`target-id` is required: every rehearsal case is bound to one target.");
+  }
+
+  // Explicit only: the rehearsal must exercise the environment the console
+  // asked for, never one inferred from the branch or the API key prefix.
+  const environment = getInput("environment");
+  if (!environment) {
+    return failInput("`environment` is required and is not derived in rehearsal mode.");
+  }
+
+  const artifactDigest = getInput("artifact-digest") || undefined;
+  const gh = getGitHubContext();
+
+  // Same derivation as the single-eval path (used by cases 1, 3 and 5; case
+  // 2 always sends approvals 0).
+  const approvalsFrom = (getInput("approvals-from") || "pr-reviews").toLowerCase();
+  const approvalEvidence: ApprovalEvidence | null =
+    approvalsFrom === "pr-reviews"
+      ? await resolveApprovals({
+          repository: gh.repository,
+          sha: gh.sha,
+          prNumber: gh.pr_number ?? null,
+          token: process.env["GITHUB_TOKEN"],
+          apiBase: process.env["GITHUB_API_URL"],
+          log: info,
+          warn: warning,
+        })
+      : null;
+
+  info(
+    `AtlaSent rehearsal ${requestId}: running 5 authorization cases for "${actionType}" ` +
+      `on target "${targetId}" in ${environment}.`,
+  );
+
+  const report = await runRehearsal(
+    {
+      apiKey,
+      apiUrl,
+      requestId,
+      actionType,
+      targetId,
+      environment,
+      artifactDigest,
+      approvalEvidence,
+      github: gh,
+    },
+    { mask: maskValue, log: info },
+  );
+
+  setOutput("rehearsal-request-id", report.requestId);
+  setOutput("rehearsal-cases", JSON.stringify(report.cases));
+  setOutput("rehearsal-verdict", report.verdict);
+  appendToStepSummary(
+    renderRehearsalStepSummary(report, {
+      actionType,
+      targetId,
+      environment,
+      runUrl: `${gh.server_url}/${gh.repository}/actions/runs/${gh.run_id}`,
+    }),
+  );
+
+  if (report.error !== undefined) {
+    setFailed(`AtlaSent rehearsal ${requestId}: stopped (fail-closed): ${report.error}`);
+  }
+  if (report.verdict !== "all_expected") {
+    const off = report.cases
+      .filter((c) => c.status !== "expected")
+      .map((c) => `${c.case_id}=${c.status}`)
+      .join(", ");
+    setFailed(
+      `AtlaSent rehearsal ${requestId}: not every case behaved as expected (${off}). ` +
+        "See the rehearsal-cases output and the job summary.",
+    );
+  }
+  info(
+    `AtlaSent rehearsal ${requestId}: all five cases behaved as expected. This is informational; ` +
+      "the AtlaSent console's server-side check of the runtime's records is what counts.",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -2068,6 +2190,15 @@ export async function run(): Promise<void> {
     return;
   }
 
+  // ── Authorization rehearsal (atlasent-console#3377) ──────────────────────
+  //
+  // Five rehearsal cases for one protected action, for the console to check
+  // against the runtime's records. Authorizes nothing (verified=false).
+  if (getInput("rehearsal-request-id")) {
+    await runRehearsalStep(apiKey, apiUrl);
+    return;
+  }
+
   // ── v2.1 batch path (scope-excluded from this unification) ─────────────────
   const evaluationsRaw = getInput("evaluations");
   if (evaluationsRaw) {
@@ -2357,19 +2488,14 @@ export async function run(): Promise<void> {
       : undefined;
 
   const artifactDigest = getInput("artifact-digest") || undefined;
-  // "operation" just needs to be a non-empty string identifying what kind of
-  // mutation this is (_shared/mandatory-execution-binding.ts's
-  // isCompleteChangePlan has no fixed vocabulary) -- derived from the action
-  // type's own trailing segment so each of the four mandatory-change-control
-  // action types gets an accurate label instead of a hardcoded "deploy".
-  const changePlanOperation = actionType.split(".").pop() || actionType;
-  const productionChangePlan = MANDATORY_CHANGE_CONTROL_ACTIONS.has(actionType)
-    ? {
-        operation: changePlanOperation,
-        revision: actorResolution.workloadIdentity?.source.sha ?? "",
-        ...(artifactDigest ? { artifact_ref: artifactDigest } : {}),
-      }
-    : undefined;
+  // Undefined unless actionType is one of the four mandatory-change-control
+  // types. "operation" is derived from the action type's own trailing segment
+  // (see changePlan.ts); the revision is the broker-verified commit SHA.
+  const productionChangePlan = buildMandatoryChangePlan(
+    actionType,
+    actorResolution.workloadIdentity?.source.sha ?? "",
+    artifactDigest,
+  );
 
   if (productionChangePlan && !productionChangePlan.revision) {
     setOutput("decision", "deny");
