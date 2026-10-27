@@ -461,8 +461,9 @@ describe("rehearsal mode: happy path", () => {
     }
   });
 
-  it("accepts the legacy production.deploy alias and an uppercase UUID", async () => {
-    setInput("action", "deployment.production");
+  // Alias normalization of the action input is the shared canonicalAction
+  // path, tested there; the alias literal is banned outside that allowlist.
+  it("accepts an uppercase request UUID and sends it lowercased", async () => {
     setInput("rehearsal-request-id", REQUEST_ID.toUpperCase());
     await run();
 
