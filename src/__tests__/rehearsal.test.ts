@@ -664,6 +664,27 @@ describe("rehearsal mode: a case with the wrong outcome fails the step", () => {
     expect(fs.readFileSync(outputFile, "utf-8")).not.toContain("pt-secret-nohash");
   });
 
+  it.each([undefined, "deny", "hold"])(
+    "a claimed permit with reevaluation decision %s → unexpected, decision preserved, never verified",
+    async (reEvaluationDecision) => {
+      mockWait.mockImplementation(async () => ({
+        status: "approved_awaiting_claim",
+        reEvaluationDecision,
+        permitToken: "pt-secret-nonallow",
+        executionHashExpected: CLAIMED_HASH,
+        reEvaluationId: REEVALUATION_ID,
+      }));
+      await runExpectingFailure();
+      expect(cases()["authorized_action_succeeds"]).toMatchObject({
+        status: "unexpected",
+        decision: reEvaluationDecision ?? null,
+      });
+      expect(mockVerifyPermit).not.toHaveBeenCalled();
+      expect(logs()).toContain("::add-mask::pt-secret-nonallow");
+      expect(fs.readFileSync(outputFile, "utf-8")).not.toContain("pt-secret-nonallow");
+    },
+  );
+
   it("nobody approves within max-wait-minutes → case 3 unexpected (timed_out), not a stopped run", async () => {
     const realNow = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(realNow);

@@ -2308,7 +2308,8 @@ async function runCases(args, deps, record) {
   }
   if (resolution.permitToken)
     deps.mask(resolution.permitToken);
-  const claimed = (resolution.status === "approved" || resolution.status === "approved_awaiting_claim") && !!resolution.permitToken && !!resolution.executionHashExpected;
+  const claimDecision = resolution.reEvaluationDecision ?? null;
+  const claimed = (resolution.status === "approved" || resolution.status === "approved_awaiting_claim") && claimDecision === "allow" && !!resolution.permitToken && !!resolution.executionHashExpected;
   const approvalFields = {
     approval_request_id: approvalId,
     approval_status: resolution.status,
@@ -2318,7 +2319,7 @@ async function runCases(args, deps, record) {
     record({
       case_id: "authorized_action_succeeds",
       status: "unexpected",
-      decision: resolution.reEvaluationDecision ?? null,
+      decision: claimDecision,
       deny_code: null,
       request_id: resolution.reEvaluationId ?? null,
       ...approvalFields,
@@ -2329,14 +2330,14 @@ async function runCases(args, deps, record) {
     return;
   }
   const d3 = {
-    decision: "allow",
+    decision: claimDecision,
     permitToken: resolution.permitToken,
     executionHashExpected: resolution.executionHashExpected,
     evaluationId: resolution.reEvaluationId,
     approvalRequestId: approvalId
   };
   const case3Fields = {
-    decision: "allow",
+    decision: claimDecision,
     deny_code: null,
     request_id: resolution.reEvaluationId ?? null,
     ...approvalFields
