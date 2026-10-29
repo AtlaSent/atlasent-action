@@ -33,6 +33,22 @@ jobs:
           ref: ${{ github.event.inputs.ref || github.ref }}
           fetch-depth: 0
 
+      # The dispatcher allowlist comes from this workflow's own commit, never
+      # from the run-time ref checked out above.
+      - name: Check out the dispatcher check
+        uses: actions/checkout@v7.0.1
+        with:
+          path: .dispatcher-guard
+          persist-credentials: false
+          sparse-checkout: |
+            .github/production-dispatchers.json
+            .github/actions/production-dispatcher-check
+            scripts/check-production-dispatcher.mjs
+          sparse-checkout-cone-mode: false
+      # Before anything else: refuse unless the dispatcher (and anyone
+      # re-running this attempt) is on .github/production-dispatchers.json.
+      - name: Production dispatcher must be on the allowlist
+        uses: ./.dispatcher-guard/.github/actions/production-dispatcher-check
       - uses: actions/setup-node@v7
         with:
           node-version: '20'

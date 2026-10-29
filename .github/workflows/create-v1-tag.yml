@@ -45,6 +45,10 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Before anything else: refuse unless the dispatcher (and anyone
+      # re-running this attempt) is on .github/production-dispatchers.json.
+      - name: Production dispatcher must be on the allowlist
+        uses: ./.github/actions/production-dispatcher-check
       # ── AtlaSent gate ────────────────────────────────────────────────────
       # This workflow force-repoints the floating `v1` tag that every
       # consumer's `uses: Atlasent/atlasent-action@v1` resolves

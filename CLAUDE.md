@@ -316,6 +316,8 @@ for non-main branches.
 
 ## Release process
 
+**Only listed people may release (2026-10-29).** Every job in `release.yml`, `create-v1-tag.yml` and `publish-packages.yml`, and every job bound to `tag-authority`, first runs `./.github/actions/production-dispatcher-check`. It refuses unless the tag pusher or dispatcher, and anyone re-running the attempt, is listed by numeric user id in `.github/production-dispatchers.json`. A release moves the floating `v1` tag, which every customer workflow on `@v1` runs. `release.yml` checks out a ref the dispatcher may choose, so it loads the check from a separate checkout of its own commit (`.dispatcher-guard`). `ci.yml` runs `scripts/check-production-dispatcher.mjs --self-test` and `--verify-workflows`. A workflow on a tag pushed by someone else runs that tag's copy, so a tag ruleset restricting who may create `v*` tags is still needed. Add a dispatcher only by a reviewed change to that file plus a DECISION_LEDGER entry.
+
 Full details: [`RELEASING.md`](RELEASING.md). Summary:
 
 1. Ensure `dist/index.js` is current: `npm run build`, commit if changed.

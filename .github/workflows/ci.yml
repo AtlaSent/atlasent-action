@@ -71,6 +71,21 @@ jobs:
             exit 1
           fi
 
+      # Every job that can release this action (a protected environment, or
+      # any job in a protected workflow) must check its dispatcher first. js-yaml
+      # is not a dependency here, so it is installed, pinned, outside the
+      # workspace.
+      - name: Install js-yaml 4.3.2 for the dispatcher guard
+        run: npm install --prefix "$RUNNER_TEMP/dispatcher-guard-yaml" js-yaml@4.3.2 --no-audit --no-fund --no-save
+      - name: Prove the dispatcher guard rejects the defects it targets
+        env:
+          JS_YAML_MODULE: ${{ runner.temp }}/dispatcher-guard-yaml/node_modules/js-yaml/dist/js-yaml.mjs
+        run: node scripts/check-production-dispatcher.mjs --self-test
+      - name: Check every release job runs the dispatcher check first
+        env:
+          JS_YAML_MODULE: ${{ runner.temp }}/dispatcher-guard-yaml/node_modules/js-yaml/dist/js-yaml.mjs
+        run: node scripts/check-production-dispatcher.mjs --verify-workflows
+
       # npm test above (vitest, run from the repo root) already picks up
       # packages/azure-devops-task/src/__tests__/**, same as it already does
       # for packages/enforce and packages/action — no separate test step
