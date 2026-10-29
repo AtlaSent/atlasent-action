@@ -46,6 +46,7 @@
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -79,13 +80,23 @@ export function parseAllowlist(text) {
   // without an environment. Use it where a job holds production credentials
   // without an environment, or only depends on one that does (re-running that
   // job alone would skip a check that lives in the job it needs).
-  const envs = doc.protected_environments;
-  if (!Array.isArray(envs) || envs.length === 0 || envs.some((e) => typeof e !== "string" || e === "")) {
-    return { error: "protected_environments must be a non-empty array of environment names" };
+  // protected_jobs (optional): single jobs, as "<workflow path>::<job id>". Use
+  // it where the same workflow also has a job anyone must be able to run, such
+  // as a pull-request preview beside the publish job.
+  const envs = doc.protected_environments ?? [];
+  if (!Array.isArray(envs) || envs.some((e) => typeof e !== "string" || e === "")) {
+    return { error: "protected_environments must be an array of environment names" };
   }
   const workflows = doc.protected_workflows ?? [];
   if (!Array.isArray(workflows) || workflows.some((w) => typeof w !== "string" || !/^\.github\/workflows\/[^/]+\.ya?ml$/.test(w))) {
     return { error: "protected_workflows must be an array of .github/workflows/<file> paths" };
+  }
+  const jobs = doc.protected_jobs ?? [];
+  if (!Array.isArray(jobs) || jobs.some((j) => typeof j !== "string" || !/^\.github\/workflows\/[^/]+\.ya?ml::[A-Za-z_][A-Za-z0-9_-]*$/.test(j))) {
+    return { error: "protected_jobs must be an array of .github/workflows/<file>::<job id> entries" };
+  }
+  if (envs.length + workflows.length + jobs.length === 0) {
+    return { error: "protects nothing: protected_environments, protected_workflows and protected_jobs are all empty" };
   }
   const reporting = doc.reporting_steps ?? {};
   if (typeof reporting !== "object" || Array.isArray(reporting)) return { error: "reporting_steps must be an object" };
@@ -93,7 +104,7 @@ export function parseAllowlist(text) {
     if (!Array.isArray(v) || v.some((s) => typeof s !== "string" || s === "")) return { error: `reporting_steps[${k}] must be an array of step names` };
   }
   // GitHub environment names are case-insensitive: `Production` is the same environment.
-  return { ids, logins: new Map(list.map((d) => [d.id, d.login])), envs: new Set(envs.map((e) => e.toLowerCase())), workflows: new Set(workflows), reporting };
+  return { ids, logins: new Map(list.map((d) => [d.id, d.login])), envs: new Set(envs.map((e) => e.toLowerCase())), workflows: new Set(workflows), jobs: new Set(jobs), reporting };
 }
 
 // ── enforce ────────────────────────────────────────────────────────────────
@@ -248,7 +259,6 @@ function stepRunsOnlyIfCheckPassed(step, idx, steps, guardIdx, memo = new Map())
 const envOf = (job) => (typeof job.environment === "string" ? job.environment : job.environment?.name);
 const isCheckout = (s) => typeof s?.uses === "string" && /^actions\/checkout@/.test(s.uses);
 export const GUARD_FILES = [ALLOWLIST_PATH, ".github/actions/production-dispatcher-check", "scripts/check-production-dispatcher.mjs"];
-const ACTION_SUFFIX = "/.github/actions/production-dispatcher-check";
 
 /** The checkout root a guard step loads from: "" for the workspace, else the nested path. */
 export function guardRoot(uses) {
@@ -299,8 +309,9 @@ export function verifyWorkflow(file, doc, allow) {
     const raw = envOf(job);
     const env = typeof raw === "string" ? raw : "";
     const dynamic = env.includes("${{");
-    if (!wholeWorkflow && (env === "" || (!dynamic && !allow.envs.has(env.toLowerCase())))) continue;
-    const where = `${file} job '${jobName}' (${env ? `environment ${env}` : "no environment; protected_workflows"})`;
+    const listedJob = allow.jobs?.has(`${file}::${jobName}`) ?? false;
+    if (!wholeWorkflow && !listedJob && (env === "" || (!dynamic && !allow.envs.has(env.toLowerCase())))) continue;
+    const where = `${file} job '${jobName}' (${env ? `environment ${env}` : `no environment; ${wholeWorkflow ? "protected_workflows" : "protected_jobs"}`})`;
     protectedJobs.push(`${file}::${jobName}`);
     if (job.uses) {
       findings.push(`${where} calls a reusable workflow; the check cannot run first inside it`);
@@ -373,6 +384,9 @@ export async function verifyTree(root = ".") {
   }
   for (const w of allow.workflows) {
     if (!fs.existsSync(path.join(root, w))) findings.push(`${ALLOWLIST_PATH} protected_workflows names ${w}, which does not exist`);
+  }
+  for (const j of allow.jobs) {
+    if (!protectedJobs.includes(j)) findings.push(`${ALLOWLIST_PATH} protected_jobs names ${j}, which does not exist`);
   }
   return { findings, protectedJobs };
 }
@@ -453,6 +467,27 @@ async function selfTest() {
   const noEnvWithInput = { jobs: { push: { steps: [{ uses: "actions/checkout@v7" }, { ...guardStep, with: { environment: "staging" } }] } } };
   expect(verifyWorkflow(".github/workflows/t.yml", noEnvWithInput, wfAllow).findings.length > 0, "a job without an environment must not name one to the check");
   expect(parseAllowlist(JSON.stringify({ ...allowDoc, protected_workflows: ["deploy.yml"] })).error !== undefined, "protected_workflows entries must be .github/workflows paths");
+  const jobAllow = parseAllowlist(JSON.stringify({ ...allowDoc, protected_environments: [], protected_jobs: [".github/workflows/t.yml::push"] }));
+  expect(jobAllow.error === undefined, "an allowlist protecting only listed jobs parses");
+  const twoJobs = (pushSteps) => ({ jobs: { preview: { steps: [{ uses: "actions/checkout@v7" }, { run: "build" }] }, push: { steps: pushSteps } } });
+  const tj = verifyWorkflow(".github/workflows/t.yml", twoJobs([{ uses: "actions/checkout@v7" }, { run: "publish" }]), jobAllow);
+  expect(tj.findings.length > 0, "a listed job without the check is a finding");
+  const tjOk = verifyWorkflow(".github/workflows/t.yml", twoJobs([{ uses: "actions/checkout@v7" }, guardStep, { run: "publish" }]), jobAllow);
+  expect(tjOk.findings.length === 0 && tjOk.protectedJobs.join() === ".github/workflows/t.yml::push", "only the listed job is protected; its unlisted sibling is not");
+  expect(verifyWorkflow(".github/workflows/other.yml", twoJobs([{ run: "publish" }]), jobAllow).findings.length === 0, "the same job id in another workflow is not listed");
+  expect(parseAllowlist(JSON.stringify({ ...allowDoc, protected_jobs: [".github/workflows/t.yml"] })).error !== undefined, "protected_jobs entries must name a job");
+  expect(parseAllowlist(JSON.stringify({ ...allowDoc, protected_jobs: ["t.yml::push"] })).error !== undefined, "protected_jobs entries must be .github/workflows paths");
+  expect(parseAllowlist(JSON.stringify({ ...allowDoc, protected_environments: [] })).error !== undefined, "an allowlist that protects nothing is refused");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dispatcher-guard-"));
+  try {
+    fs.mkdirSync(path.join(tmp, WORKFLOW_DIR), { recursive: true });
+    fs.writeFileSync(path.join(tmp, ALLOWLIST_PATH), JSON.stringify({ ...allowDoc, protected_environments: [], protected_jobs: [".github/workflows/t.yml::gone"] }));
+    fs.writeFileSync(path.join(tmp, WORKFLOW_DIR, "t.yml"), "jobs:\n  preview:\n    runs-on: ubuntu-latest\n    steps:\n      - run: build\n");
+    const gone = await verifyTree(tmp);
+    expect(gone.findings.some((f) => f.includes("protected_jobs names .github/workflows/t.yml::gone")), "a listed job that does not exist is a finding");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
   expect(count(wf([...good, { name: "privileged", if: "${{ !success() }}", run: "z" }])) > 0, "a !success() step (runs after a refusal) is a finding");
   expect(count(wf([...good, { name: "privileged", if: "success() || always()", run: "z" }])) > 0, "success() joined by || is a finding");
   expect(count(wf([...good, { name: "fine", if: "success() && inputs.x == 'y'", run: "z" }])) === 0, "a bare top-level success() keeps the implicit default");
