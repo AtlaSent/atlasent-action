@@ -32,7 +32,7 @@
  *                       unless both github.actor_id and the triggering actor's
  *                       numeric id are listed. Matches numeric ids, never
  *                       logins: a renamed account's old login can be claimed.
- *  --verify-workflows   Structural check (guards.yml): every job bound to a
+ *  --verify-workflows   Structural check (ci.yml): every job bound to a
  *                       protected environment runs the check first, with
  *                       nothing but checkout before it, and no later step can
  *                       run after a refusal unless it is a listed reporting

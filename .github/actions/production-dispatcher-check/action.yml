@@ -5,9 +5,9 @@
 # environment. Load it from wherever that job checked this repository out:
 # `./.github/actions/production-dispatcher-check` at the workspace root, or
 # `./<path>/.github/actions/production-dispatcher-check` under a nested path.
-# scripts/check-production-dispatcher.mjs --verify-workflows (guards.yml) fails
-# the build if a protected job lacks it, cannot load it, runs anything else
-# first, or has a later step that could run after a refusal.
+# scripts/check-production-dispatcher.mjs --verify-workflows (run by ci.yml)
+# fails the build if a protected job lacks it, cannot load it, runs anything
+# else first, or has a later step that could run after a refusal.
 #
 # Why it exists: the protected environments have no Required reviewers
 # (paid plan, atlasent-api#1739), and the AtlaSent gate authorizes the
