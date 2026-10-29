@@ -1,0 +1,42 @@
+# Refuse this job unless the person who started it, and whoever started this
+# attempt (a re-run), is listed in .github/production-dispatchers.json.
+#
+# Use it as the first step after checkout of every job bound to a protected
+# environment. Load it from wherever that job checked this repository out:
+# `./.github/actions/production-dispatcher-check` at the workspace root, or
+# `./<path>/.github/actions/production-dispatcher-check` under a nested path.
+# scripts/check-production-dispatcher.mjs --verify-workflows (run by ci.yml)
+# fails the build if a protected job lacks it, cannot load it, runs anything
+# else first, or has a later step that could run after a refusal.
+#
+# Why it exists: the protected environments have no Required reviewers
+# (paid plan, atlasent-api#1739), and the AtlaSent gate authorizes the
+# workflow's OIDC identity, not the dispatcher, so neither tells one person
+# with write access from another. See the script header for what this does
+# not cover (an edited workflow on another branch).
+
+name: production-dispatcher-check
+description: 'Refuse a protected-environment job unless its dispatcher is on .github/production-dispatchers.json'
+inputs:
+  environment:
+    description: "Only for a job whose environment is computed at run time: pass the same expression. A resolved environment that is not protected passes for anyone."
+    required: false
+    default: ''
+  github-token:
+    description: 'Used only to look up the numeric id of a person who re-ran the job.'
+    required: false
+    default: ${{ github.token }}
+runs:
+  using: composite
+  steps:
+    - name: Check the dispatcher against .github/production-dispatchers.json
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        DISPATCHER_CHECK_ENVIRONMENT: ${{ inputs.environment }}
+      # The repository root is three levels above this action, wherever the job
+      # checked it out (the workspace root, or a nested `path:`). Never rely on
+      # the step's working directory.
+      run: |
+        cd "$GITHUB_ACTION_PATH/../../.."
+        node scripts/check-production-dispatcher.mjs --enforce

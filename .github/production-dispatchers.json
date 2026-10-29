@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "rule": "Only the accounts below may start, or re-run, a job that can release this action: a protected environment's job, or any job in a protected workflow. Matched by numeric GitHub user id, never by login. Enforced by .github/actions/production-dispatcher-check as the first step of every such job; scripts/check-production-dispatcher.mjs --verify-workflows (ci.yml) fails the build if a protected job lacks it. Adding a person is a reviewed change to this file plus a DECISION_LEDGER entry in atlasent-internal.",
+  "dispatchers": [
+    {
+      "id": 220954482,
+      "login": "bettyc925",
+      "added": "2026-10-29",
+      "basis": "Founder and AtlaSent's one accountable human (DECISION_LEDGER 2026-10-02). Releases already required her: RELEASING.md and CLAUDE.md say release only by her tag push; this file makes that a check instead of a process rule."
+    }
+  ],
+  "protected_environments": [
+    "tag-authority"
+  ],
+  "protected_workflows": [
+    ".github/workflows/create-v1-tag.yml",
+    ".github/workflows/publish-packages.yml",
+    ".github/workflows/release.yml"
+  ],
+  "reporting_steps": {}
+}
