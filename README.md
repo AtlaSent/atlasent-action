@@ -46,13 +46,13 @@ self-hosted or dedicated runtime.
 
 ## Release status
 
-**v1.9.0 is the current release.** The floating `v1` tag points to it. Every
+**v1.11.0 is the current release.** The floating `v1` tag points to it. Every
 release since v1.6.0 includes the security fix preventing caller-supplied context
 from overriding verified GitHub-derived facts.
 
 Use `AtlaSent/atlasent-action@v1` for the normal floating-major
 form. Organizations that require an immutable dependency pin can use
-`AtlaSent/atlasent-action@8dd4cffb81f460dc8d468740b54439c0606e23ef` (v1.9.0).
+`AtlaSent/atlasent-action@0c656dbc0376c7bb9cc00e355a62200efeebb5ae` (v1.11.0).
 
 ## Quick start
 

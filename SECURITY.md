@@ -57,9 +57,9 @@ We follow [responsible disclosure](https://cheatsheetseries.owasp.org/cheatsheet
 - **API key handling**: `ATLASENT_API_KEY` is passed as a GitHub Actions secret and used as a Bearer token. It is never echoed to logs. The action calls `core.setSecret()` at startup to mask the key if it appears in any output.
 - **Fail-closed**: If the AtlaSent API is unreachable or returns an error, the action exits with a non-zero exit code and fails the workflow step. It never silently defaults to `allow`.
 - **Inputs**: All action inputs (`actor`, `action`, `target-id`, `context`, etc.) are validated before forwarding to the AtlaSent API. No shell interpolation is performed on input values.
-- **Outputs**: The action sets `decision` (`allow`/`deny`/`hold`/`escalate`), `verified`, and `permit-token` as step outputs. These are not masked since they are not secrets, but callers should not use `permit-token` as a credential — gate execution on `verified`, not `decision`.
+- **Outputs**: The action sets `decision` (`allow`/`deny`/`hold`/`escalate`), `verified`, and `permit-token` as step outputs. The `permit-token` and `proof-hash` values are masked in workflow logs. Callers should not use `permit-token` as a credential — gate execution on `verified`, not `decision`.
 - **Supply chain**: The action bundles its compiled output in `dist/index.js`. The build is reproducible from source via `npm run build`. Pin to a specific commit SHA in production workflows.
-- **Permissions**: The action requires no GitHub token by default. It only needs network access to the AtlaSent API endpoint.
+- **Permissions**: For `production.deploy` the job needs `id-token: write`, so the action can prove which workflow is asking. With the default `approvals-from: pr-reviews`, the action reads pull-request reviews using the workflow's `GITHUB_TOKEN` (pass it as `env: GITHUB_TOKEN`); without it, the approval count is treated as 0. That token is used only against the GitHub API and is never sent to AtlaSent. The action needs network access to the AtlaSent API endpoint and the GitHub API.
 
 ## Recommended usage
 
