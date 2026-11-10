@@ -4,6 +4,25 @@ All notable changes to `atlasent-action` are documented here.
 
 ## [Unreleased]
 
+### Added: Change Check for private repositories (`change-check` mode)
+
+`change-check: "true"` runs AtlaSent's free Change Check on the repository the
+workflow runs in, so it works on private repositories. With the workflow's own
+token (sent only to GitHub's API; no AtlaSent API call, no
+`ATLASENT_API_KEY`), it reads the last `change-check-count` (default 10, max
+30) merges into the default branch and reports, for each one, whether the code
+that merged was approved (the website's review semantics, ported into
+`src/changeCheck.ts`), who merged it, the GitHub deployments of its merge
+commit with their latest status and the time from the last approval on the
+final revision, and the protection rules of every environment that received a
+deployment, as configured now. Anything the token cannot read is reported as
+unknown with the HTTP status and the permission likely missing, never as "no
+deployments". It never fails the step on findings; only a malformed
+`change-check-count` fails it. New inputs: `change-check`,
+`change-check-count`, `change-check-token`. New outputs:
+`change-check-report` (`atlasent.action.change-check.v1`) and
+`change-check-summary`. See README, "Change Check for private repositories".
+
 ### Added: authorization rehearsal mode (atlasent-console#3377)
 
 Setting `rehearsal-request-id` (a UUID the AtlaSent console issues) runs five

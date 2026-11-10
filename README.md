@@ -4,7 +4,7 @@ GitHub Action that enforces execution-time AtlaSent authorization gates on deplo
 
 It is the pipeline step behind AtlaSent **Production Change Protection**. Enterprise teams that need coverage across many pipelines and change paths can [schedule an Enterprise call](https://cal.com/atlasent/discovery); everyone else can start free with an API key.
 
-**Free, no account:** paste any public pull request into [Change Check](https://www.atlasent.io/change-check?utm_source=action&utm_medium=readme) to see what GitHub can prove about it: who approved which revision, which checks passed on the exact code that merged, and what GitHub can't show.
+**Free, no account:** paste any public pull request into [Change Check](https://www.atlasent.io/change-check?utm_source=action&utm_medium=readme) to see what GitHub can prove about it: who approved which revision, which checks passed on the exact code that merged, and what GitHub can't show. For a private repository, run it inside GitHub with this Action: see [Change Check for private repositories](#change-check-for-private-repositories).
 
 AtlaSent evaluates an attempted action before it executes, issues a scoped permit
 when the action is authorized, and verifies that permit before the protected step
@@ -819,6 +819,101 @@ and the control denies):
 The AtlaSent API reference documents the full evidence-profile field set per
 `kind` (`control_override`, `access_grant`).
 
+## Change Check for private repositories
+
+> **Available from the next release.** `change-check` is not in v1.9.0, so
+> `@v1` does not run it yet. It will once the next `v1.x.y` tag is released.
+
+The website's [Change Check](https://www.atlasent.io/change-check) reads
+GitHub's public API from your browser, so it only works on public
+repositories. This mode runs the same check inside GitHub, on the repository
+the workflow runs in, with the workflow's own token. The token is sent only to
+GitHub's API. Nothing is sent to AtlaSent: this mode calls no AtlaSent API and
+needs no `ATLASENT_API_KEY` or account.
+
+For the last 10 pull requests merged into the default branch (set
+`change-check-count`, 1 to 30), it reports:
+
+- **Approval on the code that merged**, judged exactly as the website judges
+  it: each person's latest decisive review counts, a comment does not replace
+  an earlier approval, bots and the author are ignored, approvals given after
+  the merge are not counted, and an approval covers the merged code only if it
+  was given on the final revision. Also who merged it, and whether that was
+  its own author.
+- **Deploys**: the GitHub deployments of each merge commit, with environment,
+  time, latest status and the time from the last approval on the final
+  revision to the deploy; then, for every environment that received a deploy,
+  its protection rules as GitHub returns them today (required reviewers, wait
+  timer, deployment branches).
+- **The GitHub settings that would close each gap**, and what it cannot see.
+
+Add this workflow as `.github/workflows/atlasent-change-check.yml`:
+
+```yaml
+name: AtlaSent Change Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "How many recent merges to read (1 to 30)"
+        default: "10"
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+
+permissions:
+  contents: read
+  pull-requests: read
+  deployments: read
+  actions: read
+
+jobs:
+  change-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: AtlaSent/atlasent-action@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          change-check: "true"
+          change-check-count: ${{ inputs.count || '10' }}
+```
+
+The result is the run's job summary: one sentence first (for example, "3 of
+the last 10 merges into main had no approval on the code that merged; 4 were
+deployed to production, none through an environment that requires an approval
+to deploy."), then what needs attention, a table of the merges, the settings
+that would close each gap, and what this can't see. The same data is in the
+`change-check-report` output (JSON, `atlasent.action.change-check.v1`) and the
+sentence in `change-check-summary`.
+
+**Permissions.** GitHub's documentation lists these repository permissions for
+the calls this mode makes; they have not yet been exercised from a workflow
+run against a private repository:
+
+| Permission | Used for |
+|---|---|
+| `pull-requests: read` | The list of merged pull requests, their reviews, and who merged each one |
+| `deployments: read` | Deployments of each merge commit and their statuses |
+| `actions: read` | The repository's environments and their protection rules |
+| `contents: read` | Not needed by any call when `pull-requests: read` is granted (GitHub accepts either for a single pull request); included as the usual baseline |
+
+A `permissions:` block sets every permission it leaves out to none. If one is
+missing, that part of the report says **unknown**, with the HTTP status and
+the permission that is likely missing. It is never reported as "no
+deployments" or "no approval". `change-check-token` takes a fine-grained token
+or GitHub App installation token instead of the workflow token, if you prefer.
+
+**Never fails on findings.** The step fails only if `change-check-count` is not
+a whole number from 1 to 30.
+
+**What it can't see:** who can bypass branch rules, approvals given outside
+GitHub, deploys by tools that don't create GitHub deployments, a deployment of
+a later commit that includes a merge (it matches exact merge commits), the
+environment settings at the time of each deploy (only today's), and what
+changed in production. Environment rules also hold only GitHub Actions jobs
+that name the environment.
+
 ## Posture scan mode
 
 An advisory report on the **calling repo's own** GitHub security posture —
@@ -965,7 +1060,7 @@ and the claimed permit is consumed by case 3.
 
 The repository also contains additional CI-oriented surfaces such as batch
 evaluation, policy sync, release-candidate verification, governance-agent
-findings, VQP re-derivation, posture scan (above), and evidence-bundle
+findings, VQP re-derivation, posture scan and Change Check (above), and evidence-bundle
 output. Their machine-readable configuration is in
 [`action.yml`](./action.yml).
 They do not change the core rule: a protected execution path should proceed only
