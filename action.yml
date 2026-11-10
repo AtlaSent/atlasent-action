@@ -429,6 +429,39 @@ inputs:
       credential is supplied. Falls back to `env: GITHUB_TOKEN` when unset.
     required: false
     default: ''
+  # ── Change Check ─────────────────────────────────────────────────────────────────────────
+  change-check:
+    description: |
+      When "true", run the free AtlaSent Change Check on the repository this
+      workflow runs in (works on private repositories): for the last
+      `change-check-count` pull requests merged into the default branch, it
+      reports whether the code that merged was approved (judged as
+      www.atlasent.io/change-check judges it), who merged it, the GitHub
+      deployments of each merge commit with their latest status, and the
+      protection rules (required reviewers, wait timer, deployment branches)
+      of every environment that received a deployment, as configured now.
+      Uses only the workflow's own token, sent only to GITHUB_API_URL:
+      calls no AtlaSent API, requires no ATLASENT_API_KEY, and NEVER fails
+      the step on findings. Anything the token cannot read is reported as
+      unknown with the HTTP status and the permission likely missing, never
+      as "no deployments" or "no approval". Needs `permissions:` with
+      `contents: read`, `pull-requests: read`, `deployments: read` and
+      `actions: read` (environments). Mutually exclusive with the other
+      modes; posture-scan takes precedence if both are set.
+    required: false
+    default: 'false'
+  change-check-count:
+    description: 'Change Check only. How many recent merges into the default branch to read: a whole number from 1 to 30. Anything else fails the step. Default 10.'
+    required: false
+    default: '10'
+  change-check-token:
+    description: |
+      Change Check only. Optional token to use instead of `env: GITHUB_TOKEN`,
+      e.g. a fine-grained PAT or GitHub App installation token with read
+      access to Pull requests, Deployments and Actions on this repository.
+      Sent only to GITHUB_API_URL. Falls back to `env: GITHUB_TOKEN` when unset.
+    required: false
+    default: ''
   change-brief-id:
     description: 'Single-eval path only. Binds this evaluation to an existing Change Brief: pass the change-brief-id output of an earlier `change-brief: "true"` step. Must be supplied together with canonical-plan-digest. Required downstream by `establish-effect: "true"`, which can only establish a deploy effect for an evaluation that bound a brief.'
     required: false
@@ -622,6 +655,21 @@ outputs:
     description: 'Count of signals with status "not_applicable" — the underlying concept does not apply (e.g. org-only settings on a user-owned repo). A distinct bucket from posture-not-observable-count. Posture-scan mode only.'
   posture-summary:
     description: 'One-line human summary, e.g. "4 present / 2 absent / 3 not observable / 1 not applicable (of 9 signals)" (posture-scan mode only).'
+  # ── Change Check outputs ─────────────────────────────────────────────────────────────────
+  change-check-report:
+    description: |
+      Change Check only. JSON report, version "atlasent.action.change-check.v1":
+      {version, repository, default_branch, requested_count, generated_at,
+      limited, summary, merges[], counts, environments[], attention[],
+      unknowns[], remedies, cannot_see[]}. Each merge carries its approval
+      status (approved_final | approved_earlier | no_approval | unavailable |
+      incomplete), merged_by / merged_by_author, and its deployments
+      (recorded | none_recorded | unknown) with environment, created_at,
+      latest state and the time from the last approval on the final revision.
+      Each unknown names its scope, HTTP status and the permission likely
+      missing. See src/changeCheck.ts for the full shape.
+  change-check-summary:
+    description: 'Change Check only. One plain sentence, e.g. "3 of the last 10 merges into main had no approval on the code that merged; 4 were deployed to production, none through an environment that requires an approval to deploy."'
   # ── Evidence bundle outputs ──────────────────────────────────────────────────────────────
   evidence-bundle-sha256:
     description: 'SHA-256 hex digest of the generated compliance evidence bundle.'

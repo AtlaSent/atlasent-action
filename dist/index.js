@@ -2539,13 +2539,13 @@ function countApprovals(reviews) {
   const STATEFUL = /* @__PURE__ */ new Set(["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]);
   const latestByUser = /* @__PURE__ */ new Map();
   for (const r of reviews) {
-    const login = r.user?.login;
+    const login2 = r.user?.login;
     const state = (r.state ?? "").toUpperCase();
-    if (!login || !STATEFUL.has(state))
+    if (!login2 || !STATEFUL.has(state))
       continue;
-    latestByUser.set(login, state);
+    latestByUser.set(login2, state);
   }
-  const approving = [...latestByUser.entries()].filter(([, state]) => state === "APPROVED").map(([login]) => login).sort();
+  const approving = [...latestByUser.entries()].filter(([, state]) => state === "APPROVED").map(([login2]) => login2).sort();
   return { approvals: approving.length, approving_reviewers: approving };
 }
 async function resolveApprovals(options) {
@@ -4142,6 +4142,985 @@ function renderPostureStepSummary(result) {
   return lines.join("\n") + "\n";
 }
 
+// src/changeCheck.ts
+var CHANGE_CHECK_REPORT_VERSION = "atlasent.action.change-check.v1";
+var CHANGE_CHECK_DEFAULT_COUNT = 10;
+var CHANGE_CHECK_MAX_COUNT = 30;
+var PRODUCTION_CHANGE_AUDIT_URL = "https://www.atlasent.io/production-change-audit";
+var SCAN_LIST_SIZE = 100;
+var SCAN_LIST_PAGES = 3;
+var REVIEW_PAGE_SIZE = 100;
+var REVIEW_MAX_PAGES = 10;
+var DEPLOYMENT_PAGE_SIZE = 100;
+var STATUS_PAGE_SIZE = 100;
+var ENVIRONMENT_PAGE_SIZE = 100;
+var OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+var REPO = /^[A-Za-z0-9._-]{1,100}$/;
+var ChangeCheckInputError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ChangeCheckInputError";
+  }
+};
+function parseChangeCheckCount(raw) {
+  const value = (raw ?? "").trim();
+  if (value === "")
+    return CHANGE_CHECK_DEFAULT_COUNT;
+  if (!/^\d+$/.test(value)) {
+    throw new ChangeCheckInputError(
+      `change-check-count must be a whole number from 1 to ${CHANGE_CHECK_MAX_COUNT}; got "${value.slice(0, 40)}".`
+    );
+  }
+  const n = Number(value);
+  if (n < 1 || n > CHANGE_CHECK_MAX_COUNT) {
+    throw new ChangeCheckInputError(
+      `change-check-count must be from 1 to ${CHANGE_CHECK_MAX_COUNT}; got ${value.slice(0, 40)}.`
+    );
+  }
+  return n;
+}
+function login(user) {
+  return user && typeof user.login === "string" ? user.login : "unknown";
+}
+function isBot(user) {
+  return !!user && (user.type === "Bot" || /\[bot\]$/.test(login(user)));
+}
+function short(sha) {
+  return typeof sha === "string" ? sha.slice(0, 7) : "unknown";
+}
+function when(iso) {
+  if (typeof iso !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso))
+    return "an unknown time";
+  return iso.slice(0, 10) + " " + iso.slice(11, 16) + " UTC";
+}
+function plural(n, word) {
+  return n + " " + word + (n === 1 ? "" : "s");
+}
+function reviewSummary(items, author, headSha) {
+  const reviews = items.filter((r) => r && r.user && typeof r.state === "string");
+  const latest = /* @__PURE__ */ new Map();
+  for (const r of reviews) {
+    if (r.state === "PENDING")
+      continue;
+    const key = login(r.user);
+    const prev = latest.get(key);
+    if (r.state === "COMMENTED" && prev && prev.state !== "COMMENTED")
+      continue;
+    latest.set(key, r);
+  }
+  const humans = [...latest.values()].filter((r) => !isBot(r.user) && login(r.user) !== author);
+  const approvals = humans.filter((r) => r.state === "APPROVED");
+  return {
+    reviews,
+    approvals,
+    onHead: approvals.filter((r) => r.commit_id === headSha),
+    earlier: approvals.filter((r) => r.commit_id !== headSha),
+    changes: humans.filter((r) => r.state === "CHANGES_REQUESTED")
+  };
+}
+function selectRecentMerges(items, more, max) {
+  const list = Array.isArray(items) ? items : [];
+  const prs = list.filter(
+    (p) => !!p && typeof p.number === "number" && typeof p.merged_at === "string" && !!p.head && !!p.base
+  );
+  const full = !!more && list.length > 0;
+  const updated = full ? list.map((p) => p && p.updated_at).filter((u) => typeof u === "string").sort()[0] ?? null : null;
+  const defaults = prs.filter(
+    (p) => !p.base.repo || typeof p.base.repo.default_branch !== "string" || p.base.ref === p.base.repo.default_branch
+  );
+  const first = defaults[0];
+  const branch = first && first.base.repo && typeof first.base.repo.default_branch === "string" ? first.base.repo.default_branch : null;
+  const confirmed = defaults.filter((p) => !updated || p.merged_at >= updated).sort((a, b) => a.merged_at < b.merged_at ? 1 : a.merged_at > b.merged_at ? -1 : 0).slice(0, max);
+  return { branch, prs: confirmed, limited: full && confirmed.length < max };
+}
+var APPROVAL_LABELS = {
+  approved_final: "Final revision approved",
+  approved_earlier: "Earlier revision only",
+  no_approval: "No visible approval",
+  unavailable: "Reviews not read",
+  incomplete: "Reviews not read in full"
+};
+function classifyMergeApproval(reviews, pr) {
+  const author = login(pr.user);
+  const after = (x) => !!x && typeof x.submitted_at === "string" && x.submitted_at > pr.merged_at;
+  const late = reviewSummary(reviews.filter(after), author, pr.head.sha).approvals.length;
+  const lateNote = late ? " " + plural(late, "approval") + " given after the merge " + (late === 1 ? "is" : "are") + " not counted." : "";
+  const { onHead, earlier } = reviewSummary(reviews.filter((x) => !after(x)), author, pr.head.sha);
+  const finalTimes = onHead.map((x) => x.submitted_at).filter((t) => typeof t === "string").sort();
+  const base = {
+    approvers_final: onHead.map((x) => login(x.user)),
+    approvers_earlier: earlier.map((x) => login(x.user)),
+    last_final_approval_at: finalTimes.length ? finalTimes[finalTimes.length - 1] : null,
+    late_approvals: late
+  };
+  if (onHead.length) {
+    return {
+      ...base,
+      status: "approved_final",
+      text: "Final revision " + short(pr.head.sha) + " approved by " + onHead.map((x) => "@" + login(x.user)).join(", ") + " before the merge." + lateNote
+    };
+  }
+  if (earlier.length) {
+    return {
+      ...base,
+      status: "approved_earlier",
+      text: "Approved only on an earlier revision. The final revision " + short(pr.head.sha) + " had no visible approval when it merged." + lateNote
+    };
+  }
+  return {
+    ...base,
+    status: "no_approval",
+    text: "No approving review from anyone other than the author was visible when it merged." + lateNote
+  };
+}
+function ghHeaders4(token) {
+  return {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28"
+  };
+}
+function header(res, name) {
+  try {
+    const h = res.headers;
+    return h && typeof h.get === "function" ? h.get(name) : null;
+  } catch {
+    return null;
+  }
+}
+async function ghGet(url, token, fetchImpl) {
+  let res;
+  try {
+    res = await fetchImpl(url, { headers: ghHeaders4(token) });
+  } catch (err) {
+    return { ok: false, status: null, reason: "network", message: err instanceof Error ? err.message : String(err) };
+  }
+  if (res.ok) {
+    try {
+      return { ok: true, status: res.status, body: await res.json() };
+    } catch (err) {
+      return { ok: false, status: res.status, reason: "malformed", message: `response was not JSON: ${String(err)}` };
+    }
+  }
+  const text = await res.text().catch(() => "");
+  const message = text.slice(0, 200);
+  const remaining = header(res, "x-ratelimit-remaining");
+  if (res.status === 429 || res.status === 403 && (remaining === "0" || header(res, "retry-after") !== null)) {
+    return { ok: false, status: res.status, reason: "rate_limited", message };
+  }
+  if (res.status === 401)
+    return { ok: false, status: 401, reason: "unauthorized", message };
+  if (res.status === 403)
+    return { ok: false, status: 403, reason: "forbidden", message };
+  if (res.status === 404)
+    return { ok: false, status: 404, reason: "not_found", message };
+  return { ok: false, status: res.status, reason: "http_error", message };
+}
+var PERMISSION_FOR = {
+  token: null,
+  repository: null,
+  pull_requests: "pull-requests: read",
+  reviews: "pull-requests: read",
+  merged_by: "pull-requests: read",
+  deployments: "deployments: read",
+  deployment_statuses: "deployments: read",
+  environments: "actions: read"
+};
+function failureHint(reason, permission, message) {
+  switch (reason) {
+    case "forbidden":
+      return permission ? `GitHub refused the token. The workflow's \`permissions:\` block likely lacks \`${permission}\` (or the change-check-token credential lacks the matching repository permission).` : "GitHub refused the token.";
+    case "not_found":
+      return permission ? `GitHub answers 404 when the token cannot see this resource. Check that the token can read this repository and has \`${permission}\`.` : "GitHub answers 404 when the token cannot see this resource.";
+    case "unauthorized":
+      return "GitHub rejected the token as invalid or expired.";
+    case "rate_limited":
+      return "GitHub's API rate limit was reached. Run the check again later.";
+    case "network":
+      return `The request did not complete${message ? `: ${message}` : ""}.`;
+    case "malformed":
+      return "GitHub's response was not in the expected shape.";
+    default:
+      return "GitHub returned an unexpected response.";
+  }
+}
+function unknownFrom(scope, what, failure, extra = {}) {
+  const permission = failure.reason === "forbidden" || failure.reason === "not_found" ? PERMISSION_FOR[scope] : null;
+  const status = failure.status !== null ? `HTTP ${failure.status}` : "no HTTP response";
+  return {
+    scope,
+    ...extra,
+    http_status: failure.status,
+    reason: failure.reason,
+    likely_missing_permission: permission,
+    detail: `${what} could not be read (${status}). ${failureHint(failure.reason, PERMISSION_FOR[scope], failure.message)}`
+  };
+}
+function formatDuration(seconds) {
+  const s = Math.abs(Math.round(seconds));
+  if (s < 60)
+    return "under a minute";
+  const minutes = Math.floor(s / 60);
+  if (minutes < 60)
+    return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remMin = minutes % 60;
+  if (hours < 48)
+    return remMin ? `${hours} h ${remMin} min` : `${hours} h`;
+  const days = Math.floor(hours / 24);
+  const remH = hours % 24;
+  return remH ? `${days} d ${remH} h` : `${days} d`;
+}
+function isoMillis(iso) {
+  if (typeof iso !== "string")
+    return null;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : null;
+}
+function approvalToDeploy(lastApproval, deployedAt) {
+  if (!lastApproval)
+    return { seconds: null, text: "No approval on the final revision to measure from." };
+  const a = isoMillis(lastApproval);
+  const d = isoMillis(deployedAt);
+  if (a === null || d === null)
+    return { seconds: null, text: "Deployment time not recorded." };
+  const seconds = Math.round((d - a) / 1e3);
+  return seconds >= 0 ? { seconds, text: `${formatDuration(seconds)} after the last approval on the final revision` } : { seconds, text: `${formatDuration(seconds)} before the last approval on the final revision` };
+}
+var REACHED_STATES = /* @__PURE__ */ new Set(["success", "inactive"]);
+async function fetchEnvironments(base, token, fetchImpl) {
+  const res = await ghGet(`${base}/environments?per_page=${ENVIRONMENT_PAGE_SIZE}`, token, fetchImpl);
+  if (!res.ok)
+    return { ok: false, byName: /* @__PURE__ */ new Map(), complete: false, failure: res };
+  const body = res.body;
+  if (!body || !Array.isArray(body.environments)) {
+    return {
+      ok: false,
+      byName: /* @__PURE__ */ new Map(),
+      complete: false,
+      failure: { ok: false, status: res.status, reason: "malformed", message: "no environments array" }
+    };
+  }
+  const byName = /* @__PURE__ */ new Map();
+  for (const e of body.environments) {
+    if (e && typeof e.name === "string")
+      byName.set(e.name.toLowerCase(), e);
+  }
+  const total = typeof body.total_count === "number" ? body.total_count : body.environments.length;
+  return { ok: true, byName, complete: total <= body.environments.length };
+}
+function reviewerName(entry) {
+  const e = entry;
+  const r = e?.reviewer;
+  if (!r)
+    return "unknown";
+  if (e?.type === "Team")
+    return "team " + String(typeof r.slug === "string" ? r.slug : typeof r.name === "string" ? r.name : "unknown");
+  return typeof r.login === "string" ? r.login : "unknown";
+}
+function describeEnvironment(name, envs) {
+  const empty = {
+    required_reviewers: null,
+    wait_timer_minutes: null,
+    deployment_branch_policy: null,
+    other_rules: []
+  };
+  if (!envs.ok) {
+    const f = envs.failure;
+    return {
+      name,
+      status: "unknown",
+      http_status: f.status,
+      ...empty,
+      requires_approval: null,
+      detail: unknownFrom("environments", "Environment settings", f).detail
+    };
+  }
+  const raw = envs.byName.get(name.toLowerCase());
+  if (!raw) {
+    if (!envs.complete) {
+      return {
+        name,
+        status: "unknown",
+        http_status: null,
+        ...empty,
+        requires_approval: null,
+        detail: `GitHub lists more than ${ENVIRONMENT_PAGE_SIZE} environments and "${name}" was not among those read.`
+      };
+    }
+    return {
+      name,
+      status: "not_configured",
+      http_status: null,
+      ...empty,
+      requires_approval: false,
+      detail: `GitHub's environment list has no environment named "${name}", so GitHub records no protection rules for it.`
+    };
+  }
+  const rules = Array.isArray(raw.protection_rules) ? raw.protection_rules : [];
+  let required2 = null;
+  let wait = null;
+  const other = [];
+  for (const r of rules) {
+    if (!r || typeof r.type !== "string")
+      continue;
+    if (r.type === "required_reviewers") {
+      required2 = {
+        reviewers: Array.isArray(r.reviewers) ? r.reviewers.map(reviewerName) : [],
+        prevent_self_review: typeof r.prevent_self_review === "boolean" ? r.prevent_self_review : null
+      };
+    } else if (r.type === "wait_timer") {
+      wait = typeof r.wait_timer === "number" ? r.wait_timer : null;
+    } else if (r.type !== "branch_policy") {
+      other.push(r.type);
+    }
+  }
+  const dbp = raw.deployment_branch_policy;
+  const policy = dbp && typeof dbp === "object" ? {
+    protected_branches: typeof dbp.protected_branches === "boolean" ? dbp.protected_branches : null,
+    custom_branch_policies: typeof dbp.custom_branch_policies === "boolean" ? dbp.custom_branch_policies : null
+  } : null;
+  return {
+    name,
+    status: "configured",
+    http_status: null,
+    required_reviewers: required2,
+    wait_timer_minutes: wait,
+    deployment_branch_policy: policy,
+    other_rules: other,
+    requires_approval: required2 !== null,
+    detail: required2 ? `Requires approval from ${required2.reviewers.join(", ") || "configured reviewers"} before a job that names it can deploy (as configured now).` : "No required reviewers are configured (as configured now)."
+  };
+}
+function asFailure(res) {
+  return res.ok ? { ok: false, status: res.status, reason: "malformed", message: "unexpected response shape" } : res;
+}
+async function readApproval(ctx, p) {
+  const reviews = [];
+  let full = false;
+  const none = { approvers_final: [], approvers_earlier: [], last_final_approval_at: null, late_approvals: 0 };
+  for (let page = 1; page <= REVIEW_MAX_PAGES; page++) {
+    const res = await ghGet(
+      `${ctx.base}/pulls/${p.number}/reviews?per_page=${REVIEW_PAGE_SIZE}&page=${page}`,
+      ctx.token,
+      ctx.fetchImpl
+    );
+    if (!res.ok || !Array.isArray(res.body)) {
+      const u = unknownFrom("reviews", `Reviews on #${p.number}`, asFailure(res), { pr_number: p.number });
+      ctx.unknowns.push(u);
+      return { ...none, status: "unavailable", text: u.detail };
+    }
+    reviews.push(...res.body);
+    full = res.body.length >= REVIEW_PAGE_SIZE;
+    if (!full)
+      break;
+  }
+  if (full) {
+    return {
+      ...none,
+      status: "incomplete",
+      text: `More than ${REVIEW_PAGE_SIZE * REVIEW_MAX_PAGES} reviews; later ones were not read, so no conclusion is drawn.`
+    };
+  }
+  return classifyMergeApproval(reviews, p);
+}
+async function readMergedBy(ctx, number) {
+  const res = await ghGet(`${ctx.base}/pulls/${number}`, ctx.token, ctx.fetchImpl);
+  const mb = res.ok && res.body && typeof res.body === "object" ? res.body.merged_by : void 0;
+  if (mb && typeof mb.login === "string")
+    return mb.login;
+  const failure = res.ok ? { ...asFailure(res), message: "no merged_by" } : res;
+  ctx.unknowns.push(unknownFrom("merged_by", `Who merged #${number}`, failure, { pr_number: number }));
+  return null;
+}
+async function readLatestStatus(ctx, number, deploymentId) {
+  const res = await ghGet(
+    `${ctx.base}/deployments/${deploymentId}/statuses?per_page=${STATUS_PAGE_SIZE}`,
+    ctx.token,
+    ctx.fetchImpl
+  );
+  if (!res.ok || !Array.isArray(res.body)) {
+    const failure = asFailure(res);
+    ctx.unknowns.push(
+      unknownFrom("deployment_statuses", `The status of deployment ${deploymentId} (#${number})`, failure, {
+        pr_number: number,
+        deployment_id: deploymentId
+      })
+    );
+    return { read: false, http: failure.status };
+  }
+  const statuses = res.body.filter((s) => !!s && typeof s.state === "string").sort((a, b) => {
+    const ta = String(a.created_at ?? "");
+    const tb = String(b.created_at ?? "");
+    if (ta !== tb)
+      return ta < tb ? 1 : -1;
+    return (Number(b.id) || 0) - (Number(a.id) || 0);
+  });
+  const latest = statuses[0];
+  return {
+    read: true,
+    state: latest ? String(latest.state) : null,
+    at: latest && typeof latest.created_at === "string" ? latest.created_at : null,
+    http: res.status
+  };
+}
+async function readDeployments(ctx, number, mergeSha, approval) {
+  if (!mergeSha) {
+    const u = {
+      scope: "deployments",
+      pr_number: number,
+      http_status: null,
+      reason: "no_merge_commit",
+      likely_missing_permission: null,
+      detail: `GitHub gave no merge commit for #${number}, so its deployments could not be looked up.`
+    };
+    ctx.unknowns.push(u);
+    return { status: "unknown", http_status: null, detail: u.detail, truncated: false, items: [] };
+  }
+  const res = await ghGet(`${ctx.base}/deployments?sha=${mergeSha}&per_page=${DEPLOYMENT_PAGE_SIZE}`, ctx.token, ctx.fetchImpl);
+  if (!res.ok || !Array.isArray(res.body)) {
+    const failure = asFailure(res);
+    const u = unknownFrom("deployments", `Deployments of #${number} (${short(mergeSha)})`, failure, { pr_number: number });
+    ctx.unknowns.push(u);
+    return { status: "unknown", http_status: failure.status, detail: u.detail, truncated: false, items: [] };
+  }
+  if (res.body.length === 0) {
+    return {
+      status: "none_recorded",
+      http_status: res.status,
+      detail: `GitHub records no deployment of merge commit ${short(mergeSha)}. Teams that deploy with another tool will not show deployments here.`,
+      truncated: false,
+      items: []
+    };
+  }
+  const rows = [];
+  for (const d of res.body) {
+    if (!d || typeof d.id !== "number")
+      continue;
+    const createdAt = typeof d.created_at === "string" ? d.created_at : null;
+    const status = await readLatestStatus(ctx, number, d.id);
+    const timing = approvalToDeploy(approval.last_final_approval_at, createdAt);
+    const creator = d.creator;
+    rows.push({
+      id: d.id,
+      environment: typeof d.environment === "string" && d.environment ? d.environment : "unnamed",
+      production_environment: typeof d.production_environment === "boolean" ? d.production_environment : null,
+      created_at: createdAt,
+      creator: creator && typeof creator.login === "string" ? creator.login : null,
+      latest_state: status.read ? status.state : null,
+      latest_state_at: status.read ? status.at : null,
+      statuses_read: status.read ? "ok" : "unknown",
+      statuses_http_status: status.http,
+      reached: !status.read ? "unknown" : status.state && REACHED_STATES.has(status.state) ? "reached" : "not_reached",
+      approval_to_deploy_seconds: timing.seconds,
+      approval_to_deploy_text: timing.text,
+      environment_requires_approval: null
+    });
+  }
+  return {
+    status: "recorded",
+    http_status: res.status,
+    detail: `${plural(rows.length, "deployment")} of merge commit ${short(mergeSha)} recorded on GitHub.`,
+    truncated: res.body.length >= DEPLOYMENT_PAGE_SIZE,
+    items: rows
+  };
+}
+var CANNOT_SEE = [
+  "Who can bypass the branch rules or merge without them. Bypass lists and admin rights are not readable with this token.",
+  "Approvals given outside GitHub, such as a change ticket, a meeting or a chat message.",
+  "Deploys made by tools that do not create GitHub deployments (a script, a CD system or a cloud console). They do not appear here.",
+  "A deployment of a later commit can include a merge. This check matches deployments of the exact merge commit only.",
+  "Environment settings at the time of each deploy. Only today's settings can be read.",
+  "Environment rules hold only GitHub Actions jobs that name the environment. A deployment created through the API by another tool is not held by them.",
+  "What actually changed in production after a deploy."
+];
+async function runChangeCheck(opts) {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const log = opts.log ?? (() => {
+  });
+  const now = opts.now ?? (() => /* @__PURE__ */ new Date());
+  const apiBase = (opts.apiBase || "https://api.github.com").replace(/\/+$/, "");
+  const serverUrl = (opts.serverUrl || "https://github.com").replace(/\/+$/, "");
+  const count = opts.count ?? CHANGE_CHECK_DEFAULT_COUNT;
+  const repository = (opts.repository ?? "").trim();
+  const token = (opts.token ?? "").trim();
+  const unknowns = [];
+  const [owner, repo, ...rest] = repository.split("/");
+  const validRepo = !!owner && !!repo && rest.length === 0 && OWNER.test(owner) && REPO.test(repo) && repo !== "." && repo !== "..";
+  const finish = (args) => buildReport({
+    repository,
+    repositoryUrl: validRepo ? `${serverUrl}/${owner}/${repo}` : null,
+    requestedCount: count,
+    generatedAt: now().toISOString(),
+    unknowns,
+    ...args
+  });
+  if (!validRepo) {
+    unknowns.push({
+      scope: "repository",
+      http_status: null,
+      reason: "invalid_repository",
+      likely_missing_permission: null,
+      detail: `GITHUB_REPOSITORY is ${repository ? `"${repository.slice(0, 120)}", not an owner/repo name` : "not set"}, so there was no repository to read.`
+    });
+    return finish({ branch: null, limited: false, merges: [], environments: [] });
+  }
+  if (!token) {
+    unknowns.push({
+      scope: "token",
+      http_status: null,
+      reason: "no_token",
+      likely_missing_permission: null,
+      detail: "No GitHub token was supplied to this step, so nothing could be read. Pass `env: GITHUB_TOKEN: ${{ github.token }}` (or the `change-check-token` input)."
+    });
+    return finish({ branch: null, limited: false, merges: [], environments: [] });
+  }
+  const base = `${apiBase}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const items = [];
+  let selected = null;
+  for (let page = 1; page <= SCAN_LIST_PAGES; page++) {
+    const res = await ghGet(
+      `${base}/pulls?state=closed&sort=updated&direction=desc&per_page=${SCAN_LIST_SIZE}&page=${page}`,
+      token,
+      fetchImpl
+    );
+    if (!res.ok || !Array.isArray(res.body)) {
+      unknowns.push(unknownFrom("pull_requests", "The list of merged pull requests", asFailure(res)));
+      return finish({ branch: null, limited: false, merges: [], environments: [] });
+    }
+    items.push(...res.body);
+    selected = selectRecentMerges(items, res.body.length >= SCAN_LIST_SIZE, count);
+    if (!selected.limited)
+      break;
+  }
+  const { branch, prs, limited } = selected ?? { branch: null, prs: [], limited: false };
+  log(`AtlaSent Change Check: ${prs.length} recent merge(s)${branch ? ` into ${branch}` : ""} selected.`);
+  const ctx = { base, token, fetchImpl, unknowns };
+  const merges = [];
+  for (const p of prs) {
+    const author = login(p.user);
+    const mergeSha = typeof p.merge_commit_sha === "string" && /^[0-9a-f]{40}$/i.test(p.merge_commit_sha) ? p.merge_commit_sha : null;
+    const approval = await readApproval(ctx, p);
+    const mergedBy = await readMergedBy(ctx, p.number);
+    const deployments = await readDeployments(ctx, p.number, mergeSha, approval);
+    merges.push({
+      number: p.number,
+      url: `${serverUrl}/${owner}/${repo}/pull/${p.number}`,
+      title: typeof p.title === "string" ? p.title.slice(0, 200) : "",
+      author,
+      merged_at: p.merged_at,
+      merged_by: mergedBy,
+      merged_by_author: mergedBy === null ? null : mergedBy === author,
+      head_sha: typeof p.head.sha === "string" ? p.head.sha : null,
+      merge_commit_sha: mergeSha,
+      approval,
+      deployments,
+      reached_environments: [],
+      reached_production: false,
+      production_deploy_approval: null
+    });
+  }
+  const envNames = /* @__PURE__ */ new Map();
+  for (const m of merges) {
+    for (const d of m.deployments.items) {
+      const key = d.environment.toLowerCase();
+      if (!envNames.has(key))
+        envNames.set(key, d.environment);
+    }
+  }
+  const environments = [];
+  if (envNames.size > 0) {
+    const envs = await fetchEnvironments(base, token, fetchImpl);
+    if (!envs.ok && envs.failure)
+      unknowns.push(unknownFrom("environments", "Environment settings", envs.failure));
+    for (const name of envNames.values())
+      environments.push(describeEnvironment(name, envs));
+  }
+  const envByName = new Map(environments.map((e) => [e.name.toLowerCase(), e]));
+  for (const m of merges) {
+    for (const d of m.deployments.items) {
+      d.environment_requires_approval = envByName.get(d.environment.toLowerCase())?.requires_approval ?? null;
+    }
+    const reached = m.deployments.items.filter((d) => d.reached === "reached");
+    m.reached_environments = [...new Set(reached.map((d) => d.environment))];
+    const prod = reached.filter((d) => d.production_environment === true);
+    m.reached_production = prod.length > 0;
+    if (m.reached_production) {
+      m.production_deploy_approval = prod.some((d) => d.environment_requires_approval === false) ? "not_required" : prod.some((d) => d.environment_requires_approval === null) ? "unknown" : "required";
+    }
+  }
+  return finish({ branch, limited, merges, environments });
+}
+function countMerges(merges) {
+  const c = (pred) => merges.filter(pred).length;
+  const noFinal = (m) => m.approval.status === "no_approval" || m.approval.status === "approved_earlier";
+  return {
+    merges: merges.length,
+    approved_final: c((m) => m.approval.status === "approved_final"),
+    approved_earlier: c((m) => m.approval.status === "approved_earlier"),
+    no_approval: c((m) => m.approval.status === "no_approval"),
+    reviews_unread: c((m) => m.approval.status === "unavailable" || m.approval.status === "incomplete"),
+    merged_by_author: c((m) => m.merged_by_author === true),
+    merged_by_unknown: c((m) => m.merged_by_author === null),
+    merged_by_author_without_final_approval: c((m) => m.merged_by_author === true && noFinal(m)),
+    deployments_recorded: c((m) => m.deployments.status === "recorded"),
+    no_deployment_recorded: c((m) => m.deployments.status === "none_recorded"),
+    deployments_unknown: c((m) => m.deployments.status === "unknown"),
+    deployment_status_unknown: c((m) => m.deployments.items.some((d) => d.reached === "unknown")),
+    reached_any_environment: c((m) => m.reached_environments.length > 0),
+    reached_production: c((m) => m.reached_production),
+    production_approval_required: c((m) => m.production_deploy_approval === "required"),
+    production_approval_not_required: c((m) => m.production_deploy_approval === "not_required"),
+    production_approval_unknown: c((m) => m.production_deploy_approval === "unknown"),
+    production_without_final_approval: c((m) => m.reached_production && noFinal(m))
+  };
+}
+var REASON_PHRASE = {
+  no_token: "no GitHub token was supplied",
+  invalid_repository: "GITHUB_REPOSITORY is not an owner/repo name",
+  unauthorized: "token rejected",
+  forbidden: "refused",
+  not_found: "not found",
+  rate_limited: "rate limited",
+  network: "network error",
+  malformed: "unexpected response",
+  http_error: "unexpected response",
+  no_merge_commit: "no merge commit"
+};
+function statusPhrase(u) {
+  return u.http_status !== null ? `HTTP ${u.http_status}` : REASON_PHRASE[u.reason];
+}
+function distinctStatuses(us) {
+  return [...new Set(us.map(statusPhrase))].join(", ");
+}
+function summarySentence(r) {
+  const { counts: c, branch } = r;
+  const n = c.merges;
+  const into = branch ? ` into ${branch}` : "";
+  if (n === 0) {
+    const listUnknown = r.unknowns.find((u) => u.scope === "pull_requests" || u.scope === "token" || u.scope === "repository");
+    if (listUnknown)
+      return `Change Check could not read this repository's merged pull requests (${distinctStatuses([listUnknown])}), so nothing was judged.`;
+    return `GitHub shows no pull requests merged${into} in the recently closed pull requests read.`;
+  }
+  const gaps = c.no_approval + c.approved_earlier;
+  let approval;
+  if (gaps)
+    approval = `${gaps} of the last ${plural(n, "merge")}${into} had no approval on the code that merged` + (c.reviews_unread ? ` (${c.reviews_unread} could not be read)` : "");
+  else if (c.reviews_unread === n)
+    approval = `the reviews on the last ${plural(n, "merge")}${into} could not be read`;
+  else if (c.reviews_unread)
+    approval = `none of the last ${plural(n, "merge")}${into} that could be read went in without an approval on the code that merged (${c.reviews_unread} could not be read)`;
+  else
+    approval = `all ${plural(n, "recent merge")}${into} had an approval on the code that merged`;
+  approval = approval.charAt(0).toUpperCase() + approval.slice(1);
+  let deploy;
+  const depUnknown = r.unknowns.filter((u) => u.scope === "deployments");
+  if (c.deployments_unknown === n) {
+    deploy = `whether they were deployed could not be read (${distinctStatuses(depUnknown)})`;
+  } else if (c.reached_production > 0) {
+    const p = c.reached_production;
+    deploy = `${p} ${p === 1 ? "was" : "were"} deployed to production`;
+    if (c.production_approval_not_required === p)
+      deploy += ", none through an environment that requires an approval to deploy";
+    else if (c.production_approval_required === p)
+      deploy += ", all through an environment that requires an approval to deploy";
+    else if (c.production_approval_unknown === p)
+      deploy += ", and whether that needed an approval could not be read";
+    else {
+      deploy += `, ${c.production_approval_required} through an environment that requires an approval to deploy`;
+      if (c.production_approval_unknown)
+        deploy += ` (${c.production_approval_unknown} could not be checked)`;
+    }
+  } else if (c.reached_any_environment > 0) {
+    const envs = [...new Set(r.merges.flatMap((m) => m.reached_environments))];
+    deploy = `none was deployed to an environment GitHub marks as production (${c.reached_any_environment} reached ${envs.slice(0, 5).join(", ")}${envs.length > 5 ? ", \u2026" : ""})`;
+  } else if (c.deployment_status_unknown > 0) {
+    deploy = `GitHub records deployments of ${c.deployment_status_unknown} of them, but whether they succeeded could not be read (${distinctStatuses(r.unknowns.filter((u) => u.scope === "deployment_statuses"))})`;
+  } else if (c.deployments_recorded > 0) {
+    deploy = `GitHub records deployments of ${c.deployments_recorded} of them, none with a successful status`;
+  } else {
+    deploy = "GitHub records no deployment of any of them";
+  }
+  if (c.deployments_unknown > 0 && c.deployments_unknown < n)
+    deploy += `; deployments of ${c.deployments_unknown} could not be read`;
+  if (c.deployment_status_unknown > 0 && c.reached_any_environment > 0)
+    deploy += `; whether deployments of ${c.deployment_status_unknown} succeeded could not be read`;
+  return `${approval}; ${deploy}.`;
+}
+function groupUnknownAttention(unknowns) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const u of unknowns) {
+    const key = `${u.scope}|${u.http_status}|${u.reason}`;
+    groups.set(key, [...groups.get(key) ?? [], u]);
+  }
+  const what = {
+    token: "Nothing",
+    repository: "Nothing",
+    pull_requests: "The list of merged pull requests",
+    reviews: "Reviews",
+    merged_by: "Who merged",
+    deployments: "Deployments",
+    deployment_statuses: "Deployment statuses",
+    environments: "Environment settings"
+  };
+  const out = [];
+  for (const us of groups.values()) {
+    const u = us[0];
+    if (us.length === 1 || u.scope === "token" || u.scope === "repository" || u.scope === "pull_requests" || u.scope === "environments") {
+      out.push(u.detail);
+      continue;
+    }
+    const prs = [...new Set(us.map((x) => x.pr_number).filter((x) => typeof x === "number"))];
+    const status = statusPhrase(u);
+    const scope = u.scope === "deployment_statuses" ? `${plural(us.length, "deployment")}` : plural(prs.length, "merge");
+    const hint = failureHint(u.reason, PERMISSION_FOR[u.scope], "");
+    out.push(`${what[u.scope]} could not be read for ${scope} (${status}). ${u.reason === "no_merge_commit" ? "GitHub gave no merge commit to look up." : hint}`);
+  }
+  return out;
+}
+function unprotectedProductionEnvironments(merges, environments) {
+  return environments.filter(
+    (e) => e.requires_approval === false && merges.some(
+      (m) => m.deployments.items.some(
+        (d) => d.reached === "reached" && d.production_environment === true && d.environment.toLowerCase() === e.name.toLowerCase()
+      )
+    )
+  );
+}
+function buildAttention(r) {
+  const { counts: c } = r;
+  const n = c.merges;
+  const into = r.branch ? ` into ${r.branch}` : "";
+  const a = [];
+  if (c.no_approval)
+    a.push(`${c.no_approval} of the last ${plural(n, "merge")}${into} had no approving review visible on GitHub.`);
+  if (c.approved_earlier)
+    a.push(
+      `${c.approved_earlier} ${c.approved_earlier === 1 ? "was" : "were"} approved only on an earlier revision, so the code that merged had no visible approval.`
+    );
+  if (c.merged_by_author_without_final_approval)
+    a.push(
+      `${c.merged_by_author_without_final_approval} ${c.merged_by_author_without_final_approval === 1 ? "was" : "were"} merged by ${c.merged_by_author_without_final_approval === 1 ? "its" : "their"} own author with no approval on the code that merged.`
+    );
+  if (c.production_without_final_approval)
+    a.push(
+      `${plural(c.production_without_final_approval, "merge")} with no approval on the code that merged ${c.production_without_final_approval === 1 ? "was" : "were"} deployed to production.`
+    );
+  const unprotected = unprotectedProductionEnvironments(r.merges, r.environments);
+  if (unprotected.length)
+    a.push(
+      `Production ${unprotected.length === 1 ? "environment" : "environments"} ${unprotected.map((e) => `"${e.name}"`).join(", ")} ${unprotected.length === 1 ? "does" : "do"} not require an approval to deploy (as configured now); ${plural(c.production_approval_not_required, "merge")} reached ${unprotected.length === 1 ? "it" : "them"}.`
+    );
+  if (r.limited)
+    a.push(
+      `Only ${plural(n, "merge")} could be confirmed as the most recent from the ${SCAN_LIST_SIZE * SCAN_LIST_PAGES} most recently updated closed pull requests. Older merges were not read.`
+    );
+  if (c.reviews_unread)
+    a.push(
+      `For ${plural(c.reviews_unread, "pull request")} the reviews could not be read in full, so no conclusion is drawn about ${c.reviews_unread === 1 ? "it" : "them"}.`
+    );
+  a.push(...groupUnknownAttention(r.unknowns));
+  return a;
+}
+function buildRemedies(r) {
+  const branch = r.branch || "the default branch";
+  let merge = null;
+  const { no_approval: none, approved_earlier: earlier } = r.counts;
+  if (none || earlier) {
+    const rules = [];
+    if (none)
+      rules.push("Require a pull request before merging, with Required approvals set to at least 1. GitHub never counts the author's own approval.");
+    rules.push("Dismiss stale pull request approvals when new commits are pushed, so an approval covers only the revision it was given on.");
+    rules.push("Require approval of the most recent reviewable push, so the last person to push cannot be the only approver of their own change.");
+    rules.push("Keep the bypass list empty (in a ruleset), or turn on Do not allow bypassing the above settings (in classic branch protection). Otherwise admins can still merge without an approval.");
+    merge = {
+      where: `In ${r.repository}: Settings \u2192 Rules \u2192 Rulesets \u2192 New branch ruleset targeting ${branch}, with Enforcement status set to Active (a new ruleset starts as Disabled and enforces nothing). Or use Settings \u2192 Branches \u2192 Add branch protection rule.`,
+      rules,
+      caveats: [
+        "If only one person can approve changes, a required approval will block every merge. Decide who the second reviewer is before turning it on.",
+        "These settings make GitHub ask for an approval before merging. They do not record who authorized a deploy, and they do not cover changes that reach production without a pull request."
+      ],
+      rescan: 'After changing them, run this check again: merges made after the change should show "Final revision approved".'
+    };
+  }
+  let deploy = null;
+  const unprotected = unprotectedProductionEnvironments(r.merges, r.environments);
+  if (unprotected.length) {
+    const rules = [
+      "Add Required reviewers, and turn on Prevent self-review so the person who started the deploy cannot approve it."
+    ];
+    if (unprotected.some((e) => e.deployment_branch_policy === null))
+      rules.push(`Under Deployment branches and tags, choose Protected branches only or Selected branches and tags, so only code from ${branch} can deploy.`);
+    rules.push("Name the environment in the deploy job (for example `environment: production`), so the job waits for those reviewers.");
+    deploy = {
+      where: `In ${r.repository}: Settings \u2192 Environments \u2192 ${unprotected.map((e) => e.name).join(", ")}.`,
+      rules,
+      caveats: [
+        "On GitHub Free, Pro and Team plans, required reviewers on environments are available only for public repositories, so a private repository needs GitHub Enterprise for them.",
+        "Environment rules hold GitHub Actions jobs that name the environment. A deployment created through the API by another tool is not held by them.",
+        "Required reviewers record who approved a deploy job on GitHub. They do not check that what was approved is what reached production."
+      ]
+    };
+  }
+  return { merge, deploy };
+}
+function buildReport(args) {
+  const counts = countMerges(args.merges);
+  const ctx = { ...args, counts };
+  return {
+    version: CHANGE_CHECK_REPORT_VERSION,
+    repository: args.repository,
+    repository_url: args.repositoryUrl,
+    default_branch: args.branch,
+    requested_count: args.requestedCount,
+    generated_at: args.generatedAt,
+    limited: args.limited,
+    summary: summarySentence(ctx),
+    merges: args.merges,
+    counts,
+    environments: args.environments,
+    attention: buildAttention(ctx),
+    unknowns: args.unknowns,
+    remedies: buildRemedies(ctx),
+    cannot_see: CANNOT_SEE
+  };
+}
+function escapeMarkdownText(text, max = 200) {
+  let s = String(text ?? "").replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+  if (s.length > max)
+    s = s.slice(0, max - 1) + "\u2026";
+  s = s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return s.replace(/[\\`*_{}[\]()#+\-!|~@:.]/g, (ch) => "\\" + ch);
+}
+function deployedToCell(m) {
+  if (m.deployments.status === "unknown") {
+    return m.deployments.http_status !== null ? `Unknown (HTTP ${m.deployments.http_status})` : "Unknown";
+  }
+  if (m.deployments.status === "none_recorded")
+    return "No GitHub deployment of this commit";
+  const parts = m.deployments.items.map((d) => {
+    const marker = d.production_environment && d.environment.toLowerCase() !== "production" ? " (production)" : "";
+    const env = escapeMarkdownText(d.environment, 60) + marker;
+    if (d.statuses_read === "unknown")
+      return `${env}: status unknown${d.statuses_http_status !== null ? ` (HTTP ${d.statuses_http_status})` : ""}`;
+    if (!d.latest_state)
+      return `${env}: no status recorded`;
+    const state = escapeMarkdownText(d.latest_state, 20);
+    if (d.reached !== "reached")
+      return `${env}: ${state}`;
+    const timing = d.approval_to_deploy_seconds !== null ? `, ${escapeMarkdownText(d.approval_to_deploy_text, 120)}` : "";
+    return `${env}: ${state}, ${escapeMarkdownText(when(d.created_at), 30)}${timing}`;
+  });
+  return parts.join("<br>") + (m.deployments.truncated ? "<br>(more deployments may exist)" : "");
+}
+function deployApprovalCell(m) {
+  const reached = m.deployments.items.filter((d) => d.reached === "reached");
+  if (m.deployments.status === "unknown")
+    return "Unknown";
+  if (!reached.length)
+    return "\u2014";
+  const byEnv = /* @__PURE__ */ new Map();
+  for (const d of reached)
+    byEnv.set(d.environment, d.environment_requires_approval);
+  return [...byEnv.entries()].map(([env, req]) => `${req === true ? "Yes" : req === false ? "No" : "Unknown"} (${escapeMarkdownText(env, 60)})`).join("<br>");
+}
+function approvalCell(m) {
+  let s = APPROVAL_LABELS[m.approval.status];
+  if (m.merged_by_author === true)
+    s += `; merged by its own author (@${escapeMarkdownText(m.author, 60)})`;
+  else if (m.merged_by_author === null)
+    s += "; who merged it is unknown";
+  return s;
+}
+function environmentRow(e) {
+  const name = escapeMarkdownText(e.name, 60);
+  if (e.status === "unknown")
+    return `| ${name} | Unknown${e.http_status !== null ? ` (HTTP ${e.http_status})` : ""} | Unknown | Unknown |`;
+  if (e.status === "not_configured")
+    return `| ${name} | None (not in GitHub's environment list) | None | Any branch |`;
+  const reviewers = e.required_reviewers ? escapeMarkdownText(e.required_reviewers.reviewers.join(", ") || "configured", 200) + (e.required_reviewers.prevent_self_review === true ? " (self-review blocked)" : e.required_reviewers.prevent_self_review === false ? " (self-review allowed)" : "") : "None";
+  const wait = e.wait_timer_minutes ? `${e.wait_timer_minutes} min` : "None";
+  const policy = e.deployment_branch_policy ? e.deployment_branch_policy.protected_branches ? "Protected branches only" : e.deployment_branch_policy.custom_branch_policies ? "Selected branches and tags" : "Restricted (details not returned)" : "Any branch";
+  const other = e.other_rules.length ? ` Other rules: ${escapeMarkdownText(e.other_rules.join(", "), 120)}.` : "";
+  return `| ${name} | ${reviewers} | ${wait} | ${policy}${other} |`;
+}
+function remedyLines(title, r) {
+  if (!r)
+    return [];
+  return [
+    `**${title}**`,
+    "",
+    escapeMarkdownProse(r.where),
+    "",
+    ...r.rules.map((x) => `- ${x}`),
+    ...r.caveats.map((x) => `- Note: ${x}`),
+    ...r.rescan ? ["", r.rescan] : [],
+    ""
+  ];
+}
+function escapeMarkdownProse(text) {
+  return text.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/[\\*_`|[\]!]/g, (ch) => "\\" + ch);
+}
+function renderChangeCheckStepSummary(report) {
+  const lines = [];
+  const into = report.default_branch ? ` into ${escapeMarkdownText(report.default_branch, 100)}` : "";
+  lines.push(`## AtlaSent Change Check: recent merges${into} in ${escapeMarkdownText(report.repository, 140)}`);
+  lines.push("");
+  lines.push(`**${escapeMarkdownProse(report.summary)}**`);
+  lines.push("");
+  lines.push(
+    "> Advisory only. Read from GitHub with this workflow's own token; nothing was sent to AtlaSent. Anything GitHub would not show is listed as unknown, never as a clean result. This step never fails on findings."
+  );
+  lines.push("");
+  lines.push("### Needs attention");
+  lines.push("");
+  if (report.attention.length)
+    for (const a of report.attention)
+      lines.push(`- ${escapeMarkdownProse(a)}`);
+  else
+    lines.push("- Nothing in what GitHub records. That is not proof the changes were authorized or safe.");
+  lines.push("");
+  if (report.merges.length) {
+    lines.push("### Merges (newest first)");
+    lines.push("");
+    lines.push("| PR | Title | Approval on the code that merged | Deployed to | Deploy needed approval? |");
+    lines.push("|---|---|---|---|---|");
+    for (const m of report.merges) {
+      lines.push(
+        `| [#${m.number}](${m.url}) | ${escapeMarkdownText(m.title) || "(no title)"} | ${approvalCell(m)} | ${deployedToCell(m)} | ${deployApprovalCell(m)} |`
+      );
+    }
+    lines.push("");
+    lines.push(
+      `"Deploy needed approval?" reads each environment's required reviewers as configured now, not when the deploy ran. A deployment counts as reached when its latest status is success, or inactive (GitHub marks a successful deployment inactive when a later one replaces it).`
+    );
+    lines.push("");
+  }
+  if (report.environments.length) {
+    lines.push("### Environments that received a deployment (as configured now)");
+    lines.push("");
+    lines.push("| Environment | Required reviewers | Wait timer | Deployment branches |");
+    lines.push("|---|---|---|---|");
+    for (const e of report.environments)
+      lines.push(environmentRow(e));
+    lines.push("");
+  }
+  if (report.remedies.merge || report.remedies.deploy) {
+    lines.push("### GitHub settings that would close these gaps");
+    lines.push("");
+    lines.push(...remedyLines("Merges", report.remedies.merge));
+    lines.push(...remedyLines("Deploys", report.remedies.deploy));
+  }
+  lines.push("### What this can't see");
+  lines.push("");
+  for (const c of report.cannot_see)
+    lines.push(`- ${c}`);
+  lines.push("");
+  lines.push(`AtlaSent checks the exact change at deploy time: ${PRODUCTION_CHANGE_AUDIT_URL}`);
+  return lines.join("\n") + "\n";
+}
+
 // src/insights.ts
 var import_enforce14 = __toESM(require_dist());
 async function runInsightsEvaluate(cfg, log = console) {
@@ -5268,6 +6247,37 @@ async function runPostureScanStep() {
     `AtlaSent Posture Scan complete: ${result.observed_count}/${result.findings.length} signals observed. Advisory only \u2014 this step never fails the run.`
   );
 }
+async function runChangeCheckStep() {
+  const gh = getGitHubContext();
+  let count;
+  try {
+    count = parseChangeCheckCount(getInput("change-check-count"));
+  } catch (err) {
+    if (err instanceof ChangeCheckInputError)
+      setFailed(`AtlaSent Change Check: ${err.message}`);
+    throw err;
+  }
+  const tokenInput = getInput("change-check-token");
+  if (tokenInput)
+    maskValue(tokenInput);
+  const token = tokenInput || process.env["GITHUB_TOKEN"] || "";
+  info(`AtlaSent Change Check: reading the last ${count} merge(s) in ${gh.repository || "(repository unknown)"}`);
+  const report = await runChangeCheck({
+    repository: gh.repository,
+    token,
+    apiBase: process.env["GITHUB_API_URL"] ?? "https://api.github.com",
+    serverUrl: gh.server_url,
+    count,
+    log: info
+  });
+  setOutput("change-check-report", JSON.stringify(report));
+  setOutput("change-check-summary", report.summary);
+  appendToStepSummary(renderChangeCheckStepSummary(report));
+  info(`Change Check: ${report.summary}`);
+  for (const a of report.attention)
+    info(`Change Check needs attention: ${a}`);
+  info("AtlaSent Change Check complete. Advisory only: this step never fails the run on findings.");
+}
 async function runGovernanceAgentsStep(apiKey, apiUrl) {
   const slugsRaw = getInput("governance-agents", true);
   const agentSlugs = slugsRaw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
@@ -5856,6 +6866,10 @@ async function run() {
   }
   if (getInput("posture-scan").toLowerCase() === "true") {
     await runPostureScanStep();
+    return;
+  }
+  if (getInput("change-check").toLowerCase() === "true") {
+    await runChangeCheckStep();
     return;
   }
   const apiKey = getApiKey();

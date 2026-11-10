@@ -12,6 +12,10 @@
 //                           (branch protection, CODEOWNERS, Dependabot,
 //                           CodeQL, secret scanning, org 2FA) via postureScan.ts.
 //                           Never gates; calls no AtlaSent API.
+//   change-check=true     → advisory Change Check of this repo's recent merges
+//                           (approval on the merged code, GitHub deployments,
+//                           environment protection) via changeCheck.ts.
+//                           Never gates; calls no AtlaSent API.
 //   policy-sync=true      → v1-policy-sync (post bundle, fail CI on rejection)
 //   rehearsal-request-id  → five authorization rehearsal cases (rehearsal.ts,
 //                           atlasent-console#3377); checked after the other
@@ -99,6 +103,12 @@ import {
   mintGithubApprovalArtifacts,
 } from "./githubApprovalMint";
 import { renderPostureStepSummary, runPostureScan } from "./postureScan";
+import {
+  ChangeCheckInputError,
+  parseChangeCheckCount,
+  renderChangeCheckStepSummary,
+  runChangeCheck,
+} from "./changeCheck";
 import { runInsightsEvaluate } from "./insights";
 import { MISSING_API_KEY_HINT } from "./apiKeyHint";
 import {
@@ -1314,6 +1324,49 @@ async function runPostureScanStep(): Promise<void> {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Change Check step — the private-repository version of www.atlasent.io/change-check
+// ---------------------------------------------------------------------------
+//
+// Reads this repository's last N merges into the default branch, their
+// approvals, GitHub deployments of each merge commit and the protection of
+// the environments they reached, with the workflow's own token (sent only to
+// GITHUB_API_URL). Never gates and never calls the AtlaSent API. Anything it
+// cannot read is reported as unknown with the HTTP status; only a malformed
+// input fails the step. See changeCheck.ts's header.
+async function runChangeCheckStep(): Promise<void> {
+  const gh = getGitHubContext();
+  let count: number;
+  try {
+    count = parseChangeCheckCount(getInput("change-check-count"));
+  } catch (err) {
+    if (err instanceof ChangeCheckInputError) setFailed(`AtlaSent Change Check: ${err.message}`);
+    throw err;
+  }
+  const tokenInput = getInput("change-check-token");
+  if (tokenInput) maskValue(tokenInput);
+  const token = tokenInput || process.env["GITHUB_TOKEN"] || "";
+
+  info(`AtlaSent Change Check: reading the last ${count} merge(s) in ${gh.repository || "(repository unknown)"}`);
+
+  const report = await runChangeCheck({
+    repository: gh.repository,
+    token,
+    apiBase: process.env["GITHUB_API_URL"] ?? "https://api.github.com",
+    serverUrl: gh.server_url,
+    count,
+    log: info,
+  });
+
+  setOutput("change-check-report", JSON.stringify(report));
+  setOutput("change-check-summary", report.summary);
+  appendToStepSummary(renderChangeCheckStepSummary(report));
+
+  info(`Change Check: ${report.summary}`);
+  for (const a of report.attention) info(`Change Check needs attention: ${a}`);
+  info("AtlaSent Change Check complete. Advisory only: this step never fails the run on findings.");
+}
+
 async function runGovernanceAgentsStep(apiKey: string, apiUrl: string): Promise<void> {
   const slugsRaw = getInput("governance-agents", true);
   const agentSlugs = slugsRaw
@@ -2092,6 +2145,18 @@ export async function run(): Promise<void> {
   // when no AtlaSent key is configured yet.
   if (getInput("posture-scan").toLowerCase() === "true") {
     await runPostureScanStep();
+    return;
+  }
+
+  // ── Change Check path ────────────────────────────────────────────────────
+  // Advisory review of this repository's recent merges and their deploys,
+  // the private-repository version of the website's Change Check. Like
+  // posture-scan it reads only GitHub with the workflow's own token, calls
+  // no AtlaSent API and needs no ATLASENT_API_KEY, so it is routed before
+  // getApiKey(). The trajectory guard and region validation above still run
+  // first.
+  if (getInput("change-check").toLowerCase() === "true") {
+    await runChangeCheckStep();
     return;
   }
 

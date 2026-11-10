@@ -28,6 +28,7 @@ The action supports several mutually exclusive modes, checked in this priority o
 | **Change Brief** | `change-brief: "true"` | Gathers this run's real GitHub/CI facts, calls `v1-change-brief`, and renders an evidence-bound `management_decision_brief.v1` projection. Source-read gaps are disclosed as `evidence_incomplete`; the projection remains advisory and never authorizes execution. |
 | **VQP verify** | `vqp-snapshot-id:` set | Re-derives a VQP snapshot and audits hash/verdict drift |
 | **Posture scan** | `posture-scan: "true"` | Advisory report on the CALLING repo's own GitHub security posture (branch protection, CODEOWNERS, Dependabot, CodeQL, secret scanning, org 2FA), using only `GITHUB_TOKEN` + the checked-out tree. Calls no AtlaSent API, never gates, never fabricates a signal — see `src/postureScan.ts`'s header for exactly what is/isn't observable with default token permissions and why |
+| **Change Check** | `change-check: "true"` | Advisory, private-repo version of www.atlasent.io/change-check, run on the CALLING repo with the workflow's own token: for the last `change-check-count` (default 10, max 30) merges into the default branch, whether the code that merged was approved (website semantics, ported in `src/changeCheck.ts`), who merged it, GitHub deployments of each merge commit with latest status, and the protection rules of each environment that received one (as configured now). Calls no AtlaSent API, never gates; anything unreadable is `unknown` with the HTTP status and likely missing permission, never "no deployments". Only a malformed `change-check-count` fails the step |
 
 > **`trajectory-verify` is not a mode — it never was.** No version of this action has ever implemented it: the runtime has no `/v1/trajectory-verify` endpoint, and no code path here ever called one. `action.yml` no longer declares its five inputs/four outputs. `run()` in `src/index.ts` fails closed, before any other mode dispatch, if a workflow still sets any of `trajectory-verify` / `trajectory-permit-id` / `trajectory-step-id` / `trajectory-step-name` / `trajectory-halt-on-deviation` (GitHub Actions still forwards an undeclared `with:` key as an `INPUT_*` env var, so removing the declaration alone would not have stopped a legacy caller from silently falling through into an unrelated mode). See `docs/trajectory-verify.md` and AtlaSent API issue #2932. `src/stateTransition.ts` is unrelated — it builds `current_state`/`proposed_state` payloads for ordinary evaluate calls, not a trajectory-verify implementation; an earlier version of this doc incorrectly named it as one.
 
@@ -47,6 +48,7 @@ src/                  TypeScript source
   vqpVerify.ts        VQP re-derivation mode
   stateTransition.ts  State-transition (current_state/proposed_state) builders for evaluate calls
   postureScan.ts      Posture-scan mode — advisory GitHub security-posture report
+  changeCheck.ts      Change-check mode — advisory recent-merge approval + deployment report
   evidenceBundle.ts   Post-deploy compliance evidence bundle
   stepSummary.ts      GitHub Actions job summary writer
   stream.ts           SSE poll for hold/escalate decisions
@@ -89,6 +91,7 @@ Key action inputs (see `action.yml` for the full machine-readable input/output s
 | `pr-comment-on-deny` | `"true"` | Post a PR comment on deny/hold/escalate |
 | `governance-agents` | — | Comma-separated advisory governance-agent slugs |
 | `posture-scan` | `"false"` | Set `"true"` to run posture-scan mode — advisory GitHub security-posture report, no AtlaSent API call, never gates |
+| `change-check` | `"false"` | Set `"true"` to run change-check mode — needs `permissions:` `contents: read`, `pull-requests: read`, `deployments: read`, `actions: read`; optional `change-check-count` / `change-check-token`; no AtlaSent API call, never gates |
 | `change-brief` | `"false"` | Set `"true"` to run change-brief mode instead of evaluate — gathers real GitHub/CI facts and calls `v1-change-brief` |
 | `release-mode` | — | Set `"register-and-verify"` for post-deploy release verification |
 
@@ -110,6 +113,8 @@ Key action inputs (see `action.yml` for the full machine-readable input/output s
 | `decisions` | JSON array of per-item results (batch mode) |
 | `posture-findings` | JSON array of `{id, label, observable, status, reason, detail, evidence?}` per GitHub posture signal (posture-scan mode only) |
 | `posture-summary` | One-line human summary, e.g. `"4 present / 2 absent / 3 not observable (of 9 signals)"` (posture-scan mode only) |
+| `change-check-report` | JSON `atlasent.action.change-check.v1`: per-merge approval status, merged-by, deployments (environment, created_at, latest state, time from last final-revision approval), environment protection, counts, attention, unknowns (scope + HTTP status + likely missing permission), remedies (change-check mode only) |
+| `change-check-summary` | One plain sentence, e.g. `"3 of the last 10 merges into main had no approval on the code that merged; 4 were deployed to production, none through an environment that requires an approval to deploy."` (change-check mode only) |
 
 ## Usage examples
 

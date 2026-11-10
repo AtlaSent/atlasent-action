@@ -2305,3 +2305,113 @@ describe("change-brief mode for a mandatory change-control action", () => {
     expect(consoleUrl.searchParams.get("action_type")).toBe("production.deploy");
   });
 });
+
+// ---------------------------------------------------------------------------
+// change-check mode: advisory, GitHub-only, routed next to posture-scan
+// ---------------------------------------------------------------------------
+
+describe("change-check mode", () => {
+  let savedFetch: typeof fetch;
+  let summaryFile: string;
+  beforeEach(() => {
+    savedFetch = globalThis.fetch;
+    summaryFile = path.join(os.tmpdir(), `gha-summary-${Date.now()}-${Math.random()}.md`);
+  });
+  afterEach(() => {
+    globalThis.fetch = savedFetch;
+    try { fs.unlinkSync(summaryFile); } catch { /* ignore */ }
+  });
+
+  function githubOnlyFetch() {
+    const urls: string[] = [];
+    globalThis.fetch = vi.fn(async (url: string) => {
+      urls.push(String(url));
+      if (String(url).includes("/pulls?state=closed")) {
+        return new Response(
+          JSON.stringify([
+            {
+              number: 5,
+              title: "Ship it",
+              user: { login: "alice", type: "User" },
+              merged_at: "2026-11-05T12:00:00Z",
+              updated_at: "2026-11-05T12:00:00Z",
+              merge_commit_sha: "5".repeat(40),
+              head: { sha: "a".repeat(40) },
+              base: { ref: "main", repo: { default_branch: "main" } },
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      if (String(url).includes("/deployments?")) return new Response("{}", { status: 403 });
+      if (/\/pulls\/5$/.test(String(url))) return new Response(JSON.stringify({ merged_by: { login: "alice" } }), { status: 200 });
+      return new Response("[]", { status: 200 });
+    }) as unknown as typeof fetch;
+    return urls;
+  }
+
+  it("runs with no ATLASENT_API_KEY, never calls AtlaSent, writes outputs and the step summary, and does not fail on findings", async () => {
+    setInput("change-check", "true");
+    process.env["GITHUB_REPOSITORY"] = "acme/private-app";
+    process.env["GITHUB_TOKEN"] = "ghs_test";
+    process.env["GITHUB_API_URL"] = "https://api.github.com";
+    process.env["GITHUB_STEP_SUMMARY"] = summaryFile;
+    const urls = githubOnlyFetch();
+
+    await run();
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(mockEnforce).not.toHaveBeenCalled();
+    expect(mockEvaluate).not.toHaveBeenCalled();
+    expect(urls.length).toBeGreaterThan(0);
+    expect(urls.every((u) => u.startsWith("https://api.github.com/repos/acme/private-app/"))).toBe(true);
+
+    const outputs = readOutputs(outputFile);
+    const report = JSON.parse(outputs["change-check-report"]);
+    expect(report.version).toBe("atlasent.action.change-check.v1");
+    expect(report.merges[0].approval.status).toBe("no_approval");
+    expect(report.merges[0].deployments.status).toBe("unknown");
+    expect(outputs["change-check-summary"]).toBe(report.summary);
+    expect(outputs["change-check-summary"]).toMatch(/whether they were deployed could not be read \(HTTP 403\)/);
+    expect(fs.readFileSync(summaryFile, "utf-8")).toMatch(/^## AtlaSent Change Check/);
+  });
+
+  it("uses change-check-token instead of GITHUB_TOKEN when set, and masks it", async () => {
+    setInput("change-check", "true");
+    setInput("change-check-token", "github_pat_special");
+    process.env["GITHUB_REPOSITORY"] = "acme/private-app";
+    process.env["GITHUB_TOKEN"] = "ghs_default";
+    githubOnlyFetch();
+
+    await run();
+
+    const auths = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => (c[1] as { headers: Record<string, string> }).headers.Authorization,
+    );
+    expect(auths.every((a) => a === "Bearer github_pat_special")).toBe(true);
+    expect(getConsoleLogs()).toContain("::add-mask::github_pat_special");
+  });
+
+  it.each(["0", "31", "ten"])("fails clearly on change-check-count=%s before any request", async (count) => {
+    setInput("change-check", "true");
+    setInput("change-check-count", count);
+    process.env["GITHUB_REPOSITORY"] = "acme/private-app";
+    process.env["GITHUB_TOKEN"] = "ghs_test";
+    const urls = githubOnlyFetch();
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(getExitCalls()).toContain(1);
+    expect(urls).toHaveLength(0);
+    expect(getConsoleLogs().some((l) => l.includes("::error::AtlaSent Change Check: change-check-count"))).toBe(true);
+  });
+
+  it("the trajectory-verify guard still runs first", async () => {
+    setInput("change-check", "true");
+    setInput("trajectory-verify", "true");
+    const urls = githubOnlyFetch();
+
+    await expect(run()).rejects.toBeInstanceOf(ProcessExitError);
+    expect(getConsoleLogs().some((l) => l.includes("trajectory-verify mode is not supported"))).toBe(true);
+    expect(urls).toHaveLength(0);
+  });
+});
